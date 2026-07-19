@@ -1,0 +1,24 @@
+{
+  "module_id": "filesystem_v2",
+  "name": "Filesystem v2 Module",
+  "version": "2.0.0",
+  "author": "Aaron",
+  "capabilities": [
+    "read_file",
+    "write_file",
+    "list_directory",
+    "search_files",
+    "copy",
+    "delete"
+  ],
+  "services": [
+    "logger"
+  ],
+  "worker_type": "replicable",
+  "permissions": {
+    "filesystem": "read_write",
+    "network": false,
+    "terminal": false,
+    "memory": "task_only"
+  }
+}
