@@ -1,0 +1,23 @@
+{
+  "module_id": "docker",
+  "name": "Docker Module",
+  "version": "1.0.0",
+  "author": "Aaron",
+  "capabilities": [
+    "build_image",
+    "run_container",
+    "stop_container",
+    "list_containers",
+    "exec_in_container"
+  ],
+  "services": [
+    "logger"
+  ],
+  "worker_type": "replicable",
+  "permissions": {
+    "filesystem": "read_write",
+    "network": true,
+    "terminal": true,
+    "memory": "task_only"
+  }
+}
