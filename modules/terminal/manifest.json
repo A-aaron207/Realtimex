@@ -1,0 +1,21 @@
+{
+  "module_id": "terminal",
+  "name": "Terminal Module",
+  "version": "1.0.0",
+  "author": "Aaron",
+  "capabilities": [
+    "run_command",
+    "spawn_session",
+    "execute_session_command"
+  ],
+  "services": [
+    "logger"
+  ],
+  "worker_type": "replicable",
+  "permissions": {
+    "filesystem": "read_write",
+    "network": true,
+    "terminal": true,
+    "memory": "task_only"
+  }
+}
