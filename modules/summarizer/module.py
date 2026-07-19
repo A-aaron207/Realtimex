@@ -159,5 +159,19 @@ class Module(ModuleEntryPoint):
             "status": "SUCCESS"
         }
 
+    def execute(self, capability: str, context: Any) -> dict[str, Any]:
+        """Standardized execution entry point mapping capabilities to methods."""
+        if capability == "summarize_text":
+            return self.summarize_text(context.input)
+        elif capability == "generate_text":
+            return self.generate_text(context.input)
+        elif capability == "generate_code":
+            return self.generate_code(context.input)
+        elif capability == "permission_check":
+            return self.permission_check(context)
+        else:
+            raise NotImplementedError(f"Capability {capability} not supported by this module.")
+
+
 
 

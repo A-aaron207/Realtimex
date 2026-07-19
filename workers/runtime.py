@@ -113,18 +113,23 @@ class WorkerRuntime(BaseWorker):
             module_instance = loaded_module.instance
             capability_name = context.capability
 
-            # Check if there is a method named after the capability on the class
-            if hasattr(module_instance, capability_name):
+            # Prioritize standardized execution contract
+            if hasattr(module_instance, "execute") and callable(getattr(module_instance, "execute")):
+                self._logger.debug("Executing capability via standardized contract: %s.execute(%r)", module_id, capability_name)
+                try:
+                    output_data = module_instance.execute(capability_name, context)
+                except TypeError:
+                    try:
+                        output_data = module_instance.execute(context)
+                    except TypeError:
+                        output_data = module_instance.execute(capability_name, context.input)
+            elif hasattr(module_instance, capability_name):
                 method = getattr(module_instance, capability_name)
                 if callable(method):
                     self._logger.debug("Executing capability method: %s.%s()", module_id, capability_name)
-                    # Invoke module method
-                    # Let's support passing the context or the inputs
-                    # Fallback signature checks
                     try:
                         output_data = method(context.input)
                     except TypeError:
-                        # Fallback if method expects context
                         output_data = method(context)
                 else:
                     raise WorkerExecutionError(

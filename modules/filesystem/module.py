@@ -85,3 +85,13 @@ class Module(ModuleEntryPoint):
                 "status": "FAILED"
             }
 
+    def execute(self, capability: str, context: Any) -> dict[str, Any]:
+        """Standardized execution entry point mapping capabilities to methods."""
+        if capability == "read_file":
+            return self.read_file(context.input)
+        elif capability == "write_file":
+            return self.write_file(context.input)
+        else:
+            raise NotImplementedError(f"Capability {capability} not supported by this module.")
+
+

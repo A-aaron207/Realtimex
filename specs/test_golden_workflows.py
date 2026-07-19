@@ -76,8 +76,8 @@ def execute_workflow(api: KernelAPI, goal: str, timeout: float = 12.0) -> str:
     memories = api.memory_manager.search(query={"owner": task_id, "scope": "task"})
     assert len(memories) > 0, "No task memory record was created."
 
-    # Return final response output
-    return memories[0].content
+    # Return concatenated final response output across all task memories
+    return "\n".join(m.content for m in memories)
 
 
 def test_summarize_text(booted_api):

@@ -59,3 +59,11 @@ class Module(ModuleEntryPoint):
             "latency": response.latency
         }
 
+    def execute(self, capability: str, context: Any) -> dict[str, Any]:
+        """Standardized execution entry point mapping capabilities to methods."""
+        if capability == "web_search":
+            return self.web_search(context.input)
+        else:
+            raise NotImplementedError(f"Capability {capability} not supported by this module.")
+
+
