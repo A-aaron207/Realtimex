@@ -1,0 +1,22 @@
+{
+  "module_id": "research",
+  "name": "Research Module",
+  "version": "1.0.0",
+  "author": "Aaron",
+  "capabilities": [
+    "research_topic",
+    "retrieve_content",
+    "synthesize_findings"
+  ],
+  "services": [
+    "logger",
+    "model_gateway"
+  ],
+  "worker_type": "replicable",
+  "permissions": {
+    "filesystem": "read",
+    "network": true,
+    "terminal": false,
+    "memory": "task_only"
+  }
+}
