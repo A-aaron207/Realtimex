@@ -1,0 +1,23 @@
+{
+  "module_id": "developer",
+  "name": "Developer Module",
+  "version": "1.0.0",
+  "author": "Aaron",
+  "capabilities": [
+    "generate_code",
+    "refactor_code",
+    "debug_code",
+    "run_tests"
+  ],
+  "services": [
+    "logger",
+    "model_gateway"
+  ],
+  "worker_type": "replicable",
+  "permissions": {
+    "filesystem": "read_write",
+    "network": true,
+    "terminal": true,
+    "memory": "task_only"
+  }
+}
