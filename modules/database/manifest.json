@@ -1,0 +1,37 @@
+{
+  "module_id": "database",
+  "name": "Database Module",
+  "version": "1.0.0",
+  "author": "Aaron",
+  "capabilities": [
+    "connect_database",
+    "disconnect_database",
+    "execute_query",
+    "create_database",
+    "create_table",
+    "insert_record",
+    "update_record",
+    "delete_record",
+    "select_records",
+    "list_databases",
+    "list_tables",
+    "transaction",
+    "backup_database",
+    "restore_database"
+  ],
+  "services": [
+    "logger"
+  ],
+  "worker_type": "replicable",
+  "permissions": {
+    "filesystem": "read_write",
+    "network": true,
+    "terminal": false,
+    "memory": "task_only"
+  },
+  "backends": {
+    "supported": ["sqlite", "postgresql", "mysql"],
+    "default": "sqlite",
+    "future": ["mongodb", "redis", "duckdb", "chromadb", "milvus"]
+  }
+}
