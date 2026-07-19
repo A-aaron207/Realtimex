@@ -1,0 +1,19 @@
+{
+  "module_id": "search",
+  "name": "Web Search Module",
+  "version": "1.0.0",
+  "author": "Aaron",
+  "capabilities": [
+    "web_search"
+  ],
+  "services": [
+    "logger"
+  ],
+  "worker_type": "replicable",
+  "permissions": {
+    "filesystem": "none",
+    "network": true,
+    "terminal": false,
+    "memory": "task_only"
+  }
+}

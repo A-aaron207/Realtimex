@@ -1,0 +1,34 @@
+{
+  "kernel": {
+    "name": "realtimex-kernel",
+    "version": "0.5.0",
+    "environment": "development"
+  },
+  "logging": {
+    "level": "INFO",
+    "filename": "kernel.log"
+  },
+  "event_bus": {
+    "enabled": true,
+    "history_max_size": 10000,
+    "persistence_filename": "events.jsonl",
+    "event_log_filename": "event_log.jsonl"
+  },
+  "task_system": {
+    "enabled": true,
+    "tasks_directory": "tasks"
+  },
+  "workflow_engine": {
+    "enabled": true,
+    "workflows_directory": "workflows"
+  },
+  "service_registry": {
+    "enabled": true
+  },
+  "capability_registry": {
+    "enabled": true
+  },
+  "recovery_manager": {
+    "enabled": true
+  }
+}

@@ -1,0 +1,9 @@
+# Realtimex Kernel - Milestone 1
+#
+# The Kernel Core has no third-party runtime dependencies; it relies
+# entirely on the Python 3.12+ standard library (json, logging,
+# dataclasses, enum, pathlib, uuid, datetime).
+#
+# This file exists as the stable dependency manifest that future
+# milestones (Scheduler, Memory Manager, Workflow Engine, Capability
+# Modules) will extend as they introduce real dependencies.

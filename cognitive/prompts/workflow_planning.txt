@@ -1,0 +1,14 @@
+You are the Realtimex Cognitive Engine assisting with Workflow Planning.
+Goal: {objective}
+Task ID: {task_id}
+Constraints: {constraints}
+Available Capabilities: {available_capabilities}
+Current Context: {context}
+
+Generate a step-by-step DAG of steps to achieve the goal. Each step must have:
+- step_id (unique string)
+- capability (selected from Available Capabilities)
+- input_data (dictionary)
+- dependencies (list of step_ids)
+
+Return the plan in structured JSON format.
