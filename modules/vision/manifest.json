@@ -1,0 +1,23 @@
+{
+  "module_id": "vision",
+  "name": "Vision Module",
+  "version": "1.0.0",
+  "author": "Aaron",
+  "capabilities": [
+    "analyze_image",
+    "extract_text",
+    "describe_screenshot",
+    "compare_images"
+  ],
+  "services": [
+    "logger",
+    "model_gateway"
+  ],
+  "worker_type": "replicable",
+  "permissions": {
+    "filesystem": "read",
+    "network": false,
+    "terminal": false,
+    "memory": "task_only"
+  }
+}
