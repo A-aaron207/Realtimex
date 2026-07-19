@@ -1,0 +1,22 @@
+{
+  "module_id": "python_runtime",
+  "name": "Python Runtime Module",
+  "version": "1.0.0",
+  "author": "Aaron",
+  "capabilities": [
+    "execute_script",
+    "execute_snippet",
+    "install_package",
+    "list_packages"
+  ],
+  "services": [
+    "logger"
+  ],
+  "worker_type": "replicable",
+  "permissions": {
+    "filesystem": "read_write",
+    "network": true,
+    "terminal": true,
+    "memory": "task_only"
+  }
+}
