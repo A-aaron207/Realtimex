@@ -64,7 +64,7 @@ class ResourceAllocator:
                 return None
 
             # 2. Query Worker Pool
-            pool = self._worker_manager._pools.get(capability)
+            pool = self._worker_manager.get_pool(capability)
             if not pool:
                 self._logger.warning("No worker pool exists for capability '%s'", capability)
                 return None
@@ -92,7 +92,7 @@ class ResourceAllocator:
         Release worker back to pool.
         """
         with self._lock:
-            pool = self._worker_manager._pools.get(capability)
+            pool = self._worker_manager.get_pool(capability)
             if pool:
                 pool.return_worker(worker_id)
                 self._logger.info("Released worker %s", worker_id)

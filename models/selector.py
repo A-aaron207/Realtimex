@@ -88,7 +88,12 @@ class ModelSelector:
                 if model.model_name.lower() == pref or f"{model.provider_name.lower()}/{model.model_name.lower()}" == pref:
                     return model
 
-        # 5. Rank by Latency & Cost (Lower is better)
+        # 5. Automatically prefer open-source models
+        open_source_models = [m for m in eligible_models if m.is_open_source]
+        if open_source_models:
+            eligible_models = open_source_models
+
+        # 6. Rank by Latency & Cost (Lower is better)
         # Sort key: average latency, cost per 1k tokens, then context window size
         def ranking_key(m: ModelMetadata) -> tuple[float, float, int]:
             latency = m.latency if m.latency > 0 else 0.5

@@ -4,6 +4,7 @@
   "version": "1.0.0",
   "author": "Aaron",
   "capabilities": [
+    "plan_task",
     "summarize_text",
     "generate_text",
     "generate_code",

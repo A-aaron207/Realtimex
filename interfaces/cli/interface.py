@@ -136,48 +136,20 @@ class CLIInterface(Interface):
             response: Response object to send
         """
         try:
-            status_color = "\033[32m"  # Green
-            if response.status == "error":
-                status_color = "\033[31m"  # Red
-            elif response.status in ("pending", "queued", "running"):
-                status_color = "\033[33m"  # Yellow
-            
             if response.status == "streaming":
                 # Streaming response chunk
                 sys.stdout.write(response.message)
                 sys.stdout.flush()
                 return
 
-            print(f"\n[Response ID: {self._color(response.request_id, '\033[36m')}]")
-            print(f"Status: {self._color(response.status.upper(), status_color)}")
-            
-            # Progress bar
-            progress = response.metadata.get("progress")
-            if progress is not None:
-                try:
-                    prog_val = int(progress)
-                    print(f"Progress: {self._draw_progress(prog_val)}")
-                except (ValueError, TypeError):
-                    pass
-
-            if response.message:
-                print(f"Message: {response.message}")
-            
-            if response.data:
-                print(f"Data: {response.data}")
-            
-            if response.artifacts:
-                print(self._color("Artifacts:", "\033[1m\033[34m"))
-                for artifact in response.artifacts:
-                    print(f"  - {artifact}")
-            
-            if response.events:
-                print(self._color("Events:", "\033[1m\033[34m"))
-                for event in response.events:
-                    print(f"  - {event}")
-            
-            print()  # Blank line for readability
-            
+            # Print error responses cleanly. Success statuses are cleanly managed by main.py
+            if response.status == "error":
+                status_color = "\033[31m"  # Red
+                print(f"\n[Response ID: {self._color(response.request_id, '\033[36m')}]")
+                print(f"Status: {self._color(response.status.upper(), status_color)}")
+                if response.message:
+                    print(f"Message: {response.message}")
+                print()
         except Exception as e:
             self.logger.error("Error sending CLI response: %s", e)
 

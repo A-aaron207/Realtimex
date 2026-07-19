@@ -106,6 +106,48 @@ class WorkerManager:
                 )
             )
 
+    def get_pool(self, capability: str) -> WorkerPool | None:
+        """
+        Retrieve the WorkerPool for a given capability, dynamically registering it
+        and spawning a worker if it doesn't exist yet.
+        """
+        with self._lock:
+            if capability not in self._pools:
+                try:
+                    pool = WorkerPool(capability)
+                    self._pools[capability] = pool
+                    
+                    worker_id = f"{capability}_worker_01"
+                    worker = WorkerRuntime(
+                        worker_id=worker_id,
+                        worker_type="agent_worker",
+                        supported_capability=capability,
+                        event_bus=self._event_bus,
+                        module_resolver=self._module_resolver,
+                        metadata={"pool": capability},
+                    )
+
+                    worker.set_state(WorkerState.STARTING)
+                    worker.set_state(WorkerState.IDLE)
+
+                    self._registry.register(worker)
+                    pool.add_worker(worker)
+
+                    self._logger.info("Dynamically initialized pool and registered worker %s for capability '%s'", worker_id, capability)
+
+                    # Emit WorkerStarted
+                    self._event_bus.publish(
+                        Event(
+                            name="WorkerStarted",
+                            source="workers.manager",
+                            payload={"worker_id": worker_id, "capability": capability},
+                        )
+                    )
+                except Exception as e:
+                    self._logger.exception("Failed to dynamically register pool/worker for capability '%s': %s", capability, e)
+                    return None
+            return self._pools.get(capability)
+
     def execute(self, context: ExecutionContext) -> WorkerReport:
         """
         Acquire an idle worker supporting the requested capability and execute the step.
@@ -121,7 +163,7 @@ class WorkerManager:
         """
         cap = context.capability
         with self._lock:
-            pool = self._pools.get(cap)
+            pool = self.get_pool(cap)
             if not pool:
                 raise WorkerPoolError(f"No worker pool registered for capability '{cap}'.")
 

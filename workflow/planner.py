@@ -36,9 +36,41 @@ class RuleBasedWorkflowPlanner(WorkflowPlanner):
     """
 
     def plan(self, workflow_id: str, goal: str) -> list[WorkflowStep]:
-        goal_lower = goal.lower()
+        goal_lower = goal.lower().strip()
 
-        # Try to synthesize workflow dynamically via Cognitive Engine (Model Gateway)
+        # 1. Deterministic template rules evaluated first
+        if "permission failure" in goal_lower:
+            return self._build_permission_fail_workflow(workflow_id, goal)
+        if "transient failure" in goal_lower:
+            return self._build_transient_fail_workflow(workflow_id, goal)
+        if "resource failure" in goal_lower:
+            return self._build_resource_fail_workflow(workflow_id, goal)
+        if "provider failure" in goal_lower:
+            return self._build_provider_fail_workflow(workflow_id, goal)
+        if "repair" in goal_lower or "permanent failure" in goal_lower:
+            return self._build_repair_workflow(workflow_id, goal)
+        if "parallel" in goal_lower:
+            return self._build_parallel_workflow(workflow_id, goal)
+        if any(kw in goal_lower for kw in ["retry", "recovery", "interruption", "fail"]):
+            return self._build_retry_workflow(workflow_id, goal)
+        if "permission" in goal_lower:
+            return self._build_permission_workflow(workflow_id, goal)
+        if "multi-step" in goal_lower or "read and summarize" in goal_lower:
+            return self._build_multistep_workflow(workflow_id, goal)
+        if "read local file" in goal_lower or "read file" in goal_lower:
+            return self._build_read_file_workflow(workflow_id, goal)
+        if any(kw in goal_lower for kw in ["python", "generate code", "coding", "function to"]):
+            return self._build_generate_code_workflow(workflow_id, goal)
+        if "summarize" in goal_lower or "summarization" in goal_lower:
+            return self._build_summarization_workflow(workflow_id, goal)
+        if "research" in goal_lower or "search" in goal_lower:
+            return self._build_research_workflow(workflow_id, goal)
+        if any(kw in goal_lower or kw == goal_lower for kw in ["explain", "answer", "question", "what", "how", "recursion", "hello", "hi", "hey", "help", "hello?"]):
+            return self._build_answer_question_workflow(workflow_id, goal)
+        if any(kw in goal_lower for kw in ["portfolio"]):
+            return self._build_software_workflow(workflow_id)
+
+        # 2. Try to synthesize workflow dynamically via Cognitive Engine (Model Gateway)
         try:
             from services.registry import ServiceRegistry
             registry = ServiceRegistry.get_instance()
@@ -51,20 +83,43 @@ class RuleBasedWorkflowPlanner(WorkflowPlanner):
             capabilities_list = capability_registry.list_capabilities()
             
             # 2. Intent & Constraint Analysis Prompt (Intermediate Plan Formulation)
+            import os
             prompt = f"""You are the Realtimex cognitive planning engine.
-Your task is to analyze the user's goal and generate an intermediate task analysis and execution plan.
+Your task is to analyze the user's goal and generate an execution plan with steps.
 You must select only from the available capabilities.
 
-Available Capabilities:
-{capabilities_list}
+System Context:
+- OS: linux
+- User Home Directory: {os.path.expanduser("~")}
+- Current Working Directory: {os.getcwd()}
+
+Available Capabilities (with input requirements):
+- run_command: Run a shell command. Inputs: {{"command": "<command_string>"}}. NOTE: For tasks like creating folders/directories, running terminal commands, executing scripts, etc., use this capability with appropriate shell syntax (e.g. "mkdir -p /path/to/folder").
+- write_file: Write text content to a file. Inputs: {{"path": "<path>", "content": "<content>"}}
+- read_file: Read text content from a file. Inputs: {{"path": "<path>"}}
+- list_directory: List contents of a directory. Inputs: {{"path": "<path>"}}
+- web_search: Search the web. Inputs: {{"query": "<query>"}}
+- summarize_text: Summarize text. Inputs: {{"text": "<text>"}}
+- generate_code: Generate programming code. Inputs: {{"prompt": "<prompt>"}}
+- generate_text: Generate text response. Inputs: {{"prompt": "<prompt>"}}
+- copy: Copy file/dir. Inputs: {{"source": "<source>", "destination": "<destination>"}}
+- delete: Delete file/dir. Inputs: {{"path": "<path>"}}
+
+Planning Guidelines:
+1. If the user wants to generate code, design a webpage, or write a script and save it to a file path, you MUST split this into multiple steps in the plan:
+   - Step 1: generate_code (or generate_text) to produce the code or content.
+   - Step 2: write_file to save the generated content to the target file path.
+2. To feed the output of one step into a subsequent step, use the cross-step reference string format: "Process <step_id> output" as the value of the parameter.
+   Example: If step_id is "generate_code_0", write_file's input should look like: {{"path": "/home/user/Desktop/index.html", "content": "Process generate_code_0 output"}}.
 
 User Goal:
 "{goal}"
 
 You must output a raw JSON dictionary with NO extra text or markdown formatting.
 The dictionary MUST contain the following keys exactly:
-- "intent": (string, high-level intent, e.g., "create_report", "qa", "code_gen", "summarization", "file_operation")
-- "required_capabilities": (list of strings, subset of available capabilities required to achieve the goal, in logical execution order)
+- "intent": (string, e.g., "sys_command", "qa", "code_gen", "file_operation")
+- "required_capabilities": (list of strings, selected from available capabilities in logical order)
+- "step_inputs": (dictionary mapping step IDs (formatted as capability_name_index, e.g., "read_file_0") to their input dictionary containing concrete parameters computed from the user goal)
 - "constraints": (dictionary with boolean keys "parallel" and "verification")
 - "estimated_complexity": (string, "low", "medium", or "high")
 """
@@ -83,7 +138,8 @@ The dictionary MUST contain the following keys exactly:
             raw_output = response.output.strip()
             
             # Check if running under mock/simulation mode
-            if raw_output.startswith("Simulated"):
+            is_simulated = raw_output.startswith("Simulated")
+            if is_simulated:
                 raw_output = self._synthesize_simulated_json(goal)
                 
             # Clean JSON fences if present
@@ -94,14 +150,20 @@ The dictionary MUST contain the following keys exactly:
             if raw_output.endswith("```"):
                 raw_output = raw_output[:-3]
             raw_output = raw_output.strip()
+
+            # Robust extraction of the JSON structure bounded by the first '{' and last '}'
+            start_idx = raw_output.find("{")
+            end_idx = raw_output.rfind("}")
+            if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+                raw_output = raw_output[start_idx : end_idx + 1]
             
             # 4. Parse Structured Intent Analysis and Map to Step DAG
             analysis = json.loads(raw_output)
-            return self._build_dag_from_analysis(workflow_id, goal, analysis)
+            return self._build_dag_from_analysis(workflow_id, goal, analysis, is_simulated=is_simulated)
             
         except Exception:
-            # Fallback to deterministic template rules on registry / network failures
-            return self._fallback_rule_based_plan(workflow_id, goal)
+            # Fallback to general default workflow on parsing / gateway exceptions
+            return self._build_default_workflow(workflow_id)
 
     def _fallback_rule_based_plan(self, workflow_id: str, goal: str) -> list[WorkflowStep]:
         """Fallback deterministic planner using local rules."""
@@ -133,9 +195,9 @@ The dictionary MUST contain the following keys exactly:
             return self._build_summarization_workflow(workflow_id, goal)
         if "research" in goal_lower or "search" in goal_lower:
             return self._build_research_workflow(workflow_id, goal)
-        if any(kw in goal_lower for kw in ["explain", "answer", "question", "what", "how", "recursion"]):
+        if any(kw in goal_lower for kw in ["explain", "answer", "question", "what", "how", "recursion", "hello", "hi", "hey", "help"]):
             return self._build_answer_question_workflow(workflow_id, goal)
-        if any(kw in goal_lower for kw in ["web", "portfolio", "app", "site", "build"]):
+        if any(kw in goal_lower for kw in ["portfolio"]):
             return self._build_software_workflow(workflow_id)
 
         return self._build_default_workflow(workflow_id)
@@ -235,7 +297,7 @@ The dictionary MUST contain the following keys exactly:
                 "constraints": {"parallel": False, "verification": False},
                 "estimated_complexity": "medium"
             }
-        elif any(kw in goal_lower for kw in ["explain", "answer", "question", "what", "how", "recursion"]):
+        elif any(kw in goal_lower for kw in ["explain", "answer", "question", "what", "how", "recursion", "hello", "hi", "hey", "help"]):
             analysis = {
                 "intent": "qa",
                 "required_capabilities": ["generate_text"],
@@ -252,7 +314,7 @@ The dictionary MUST contain the following keys exactly:
             
         return json.dumps(analysis)
 
-    def _build_dag_from_analysis(self, workflow_id: str, goal: str, analysis: dict[str, Any]) -> list[WorkflowStep]:
+    def _build_dag_from_analysis(self, workflow_id: str, goal: str, analysis: dict[str, Any], is_simulated: bool = False) -> list[WorkflowStep]:
         """Convert intermediate structured analysis into a step DAG."""
         intent = analysis.get("intent", "generic")
         required_caps = analysis.get("required_capabilities", [])
@@ -278,30 +340,40 @@ The dictionary MUST contain the following keys exactly:
             steps = self._build_retry_workflow(workflow_id, goal)
         elif intent == "permission_check" or "permission" in goal.lower():
             steps = self._build_permission_workflow(workflow_id, goal)
-        elif intent == "read_summarize_write" or ("read_file" in required_caps and "write_file" in required_caps):
+        elif is_simulated and (intent == "read_summarize_write" or ("read_file" in required_caps and "write_file" in required_caps)):
             steps = self._build_multistep_workflow(workflow_id, goal)
-        elif intent == "file_read" or required_caps == ["read_file"]:
+        elif is_simulated and (intent == "file_read" or required_caps == ["read_file"]):
             steps = self._build_read_file_workflow(workflow_id, goal)
-        elif intent == "code_generation" or "generate_code" in required_caps:
+        elif is_simulated and (intent == "code_generation" or "generate_code" in required_caps):
             steps = self._build_generate_code_workflow(workflow_id, goal)
-        elif intent == "summarization" or "summarize_text" in required_caps:
+        elif is_simulated and (intent == "summarization" or "summarize_text" in required_caps):
             steps = self._build_summarization_workflow(workflow_id, goal)
-        elif intent == "research" or ("web_search" in required_caps and "generate_text" in required_caps):
+        elif is_simulated and (intent == "research" or ("web_search" in required_caps and "generate_text" in required_caps)):
             steps = self._build_research_workflow(workflow_id, goal)
-        elif intent == "qa" or "generate_text" in required_caps:
+        elif is_simulated and (intent == "qa" or "generate_text" in required_caps):
             steps = self._build_answer_question_workflow(workflow_id, goal)
         else:
             # Fallback default sequential DAG mapping
             prev_id = None
+            step_inputs = analysis.get("step_inputs", {})
             for idx, cap in enumerate(required_caps):
                 step_id = f"{cap}_{idx}"
                 deps = frozenset([prev_id]) if prev_id else frozenset()
+                
+                # Fetch inputs generated by LLM, fallback to default prompt format if missing
+                inp = step_inputs.get(step_id, step_inputs.get(cap, {}))
+                if not inp:
+                    inp = {"prompt": goal if idx == 0 else f"Process {prev_id} output"}
+                elif "prompt" not in inp and "text" not in inp and "command" not in inp and "path" not in inp and "query" not in inp:
+                    # If LLM returned empty or mismatch, overlay basic prompt
+                    inp["prompt"] = goal
+                
                 steps.append(
                     WorkflowStep(
                         step_id=step_id,
                         workflow_id=workflow_id,
                         capability=cap,
-                        input_data={"prompt": goal if idx == 0 else f"Process {prev_id} output"},
+                        input_data=inp,
                         status=StepState.PENDING,
                         dependencies=deps,
                         estimated_time=2.0,

@@ -27,9 +27,13 @@ from __future__ import annotations
 
 import logging
 import os
+import concurrent.futures
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Any
+from kernel.profiler import BootProfiler
+from platform_adapter import BasePlatform, Platform
 
 from capabilities.registry import CapabilityRegistry
 from configuration.manager import ConfigurationManager
@@ -138,6 +142,8 @@ class BootResult:
     cognitive_engine: CognitiveEngine
     permission_manager: PermissionManager
     dependency_container: DependencyContainer
+    boot_profiler: BootProfiler
+    platform: BasePlatform
 
 
 
@@ -310,6 +316,7 @@ def build_module_loader(
     service_registry: ServiceRegistry,
     event_bus: EventBus,
     logger: logging.Logger,
+    boot_profiler: BootProfiler | None = None,
 ) -> ModuleLoader:
     """
     Boot step: construct the Module Loader.
@@ -326,6 +333,7 @@ def build_module_loader(
         service_registry: Registry used to check module service dependencies.
         event_bus: Event Bus used to announce loading progress.
         logger: Logger for structured diagnostic output.
+        boot_profiler: Optional boot profiler instance.
 
     Returns:
         A configured, not-yet-run ModuleLoader instance.
@@ -336,95 +344,152 @@ def build_module_loader(
         service_registry=service_registry,
         event_bus=event_bus,
         logger=logger,
+        boot_profiler=boot_profiler,
     )
 
 
-def run_boot_sequence(paths: BootPaths) -> BootResult:
+class BootTask:
+    """A wrapper for a single initialization step during boot."""
+    def __init__(
+        self,
+        name: str,
+        deps: list[str],
+        fn: Any,
+    ) -> None:
+        self.name = name
+        self.deps = deps
+        self.fn = fn
+
+
+class BootScheduler:
     """
-    Execute the full Kernel boot sequence in order, emitting an event
-    after each step.
-
-    Args:
-        paths: Filesystem locations required during boot.
-
-    Returns:
-        A BootResult containing every component initialized during boot.
+    DAG boot scheduler executing tasks in a thread pool executor.
     """
-    bootstrap_logger = logging.getLogger("realtimex.bootstrap")
-    if not bootstrap_logger.handlers:
-        bootstrap_logger.addHandler(logging.StreamHandler())
-        bootstrap_logger.setLevel(logging.INFO)
-        bootstrap_logger.propagate = False
+    def __init__(self, tasks: list[BootTask], profiler: BootProfiler) -> None:
+        self.tasks = {t.name: t for t in tasks}
+        self.profiler = profiler
+        self.resolved: dict[str, Any] = {}
+        self.lock = threading.Lock()
+        self.cv = threading.Condition(self.lock)
+        
+        # Build dependency tracking
+        self.pending_deps = {t.name: set(t.deps) for t in tasks}
+        self.dependents: dict[str, list[str]] = {t.name: [] for t in tasks}
+        for t in tasks:
+            for dep in t.deps:
+                if dep in self.dependents:
+                    self.dependents[dep].append(t.name)
+                    
+        self.active_tasks_count = 0
+        self.failed = False
+        self.error: Exception | None = None
 
-    emit_boot_started(logger=bootstrap_logger)
+    def execute(self) -> dict[str, Any]:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8, thread_name_prefix="BootWorker") as executor:
+            with self.lock:
+                # Find initial ready tasks
+                ready_tasks = [t for t in self.tasks.values() if not t.deps]
+                for t in ready_tasks:
+                    self._submit(t, executor)
+                
+                # Wait until all tasks are resolved or a task fails
+                while self.active_tasks_count > 0 or (len(self.resolved) < len(self.tasks) and not self.failed):
+                    if self.failed:
+                        break
+                    self.cv.wait()
+                    
+                if self.failed:
+                    raise RuntimeError("Boot sequence failed during concurrent execution") from self.error
+                    
+        return self.resolved
 
-    config = load_configuration(paths.config_path)
-    logger = initialize_logger(paths.log_directory, config)
+    def _submit(self, task: BootTask, executor: concurrent.futures.ThreadPoolExecutor) -> None:
+        self.active_tasks_count += 1
+        executor.submit(self._run_task, task, executor)
 
-    # --- Milestone 3: full Event Manager replaces the bare EventBus ---
-    event_manager = initialize_event_manager(logger, paths.log_directory, config)
-    event_bus = event_manager.event_bus
+    def _run_task(self, task: BootTask, executor: concurrent.futures.ThreadPoolExecutor) -> None:
+        self.profiler.start(task.name, dependencies=task.deps)
+        try:
+            result = task.fn(self.resolved)
+            self.profiler.stop(task.name, success=True)
+            
+            with self.lock:
+                self.resolved[task.name] = result
+                self.active_tasks_count -= 1
+                
+                # Check dependents
+                for dep_name in self.dependents[task.name]:
+                    self.pending_deps[dep_name].discard(task.name)
+                    if not self.pending_deps[dep_name]:
+                        self._submit(self.tasks[dep_name], executor)
+                        
+                self.cv.notify_all()
+                
+        except Exception as e:
+            self.profiler.stop(task.name, success=False, error_message=str(e))
+            with self.lock:
+                self.failed = True
+                self.error = e
+                self.active_tasks_count -= 1
+                self.cv.notify_all()
 
-    # Instantiate ConfigurationManager early so other subsystems can use it
+
+def _init_config_manager(event_bus: EventBus, paths: BootPaths) -> ConfigurationManager:
     config_manager = ConfigurationManager(event_bus=event_bus, config_dir=str(paths.config_path.parent))
     config_manager.initialize()
+    return config_manager
 
-    event_bus.emit(Event(name=KernelEventType.KERNEL_BOOT_STARTED, source="kernel.boot"))
-    event_bus.emit(
-        Event(
-            name=KernelEventType.CONFIGURATION_LOADED,
-            source="kernel.boot",
-            payload={"config_path": str(paths.config_path)},
-        )
-    )
-    event_bus.emit(Event(name=KernelEventType.LOGGER_INITIALIZED, source="kernel.boot"))
-    event_bus.emit(Event(name=KernelEventType.EVENT_BUS_INITIALIZED, source="kernel.boot"))
 
+def _init_service_registry(logger: logging.Logger) -> ServiceRegistry:
     service_registry = initialize_service_registry()
     from services.base import SimpleService
     service_registry.register(SimpleService("logger", {"logger": logger}))
-    event_bus.emit(Event(name=KernelEventType.SERVICE_REGISTRY_INITIALIZED, source="kernel.boot"))
+    return service_registry
 
-    capability_registry = initialize_capability_registry()
-    event_bus.emit(Event(name=KernelEventType.CAPABILITY_REGISTRY_INITIALIZED, source="kernel.boot"))
 
-    recovery_manager = initialize_recovery_manager(config_manager, event_bus, logger, paths.log_directory)
-    event_bus.emit(Event(name=KernelEventType.RECOVERY_INITIALIZED, source="kernel.boot"))
+def _init_capability_registry() -> CapabilityRegistry:
+    return initialize_capability_registry()
 
-    # --- Milestone 4: Task System Initialization and Recovery ---
+
+def _init_task_system(
+    config_manager: ConfigurationManager,
+    event_bus: EventBus,
+    logger: logging.Logger,
+    paths: BootPaths,
+) -> dict[str, Any]:
     tasks_dir_name = config_manager.get("task_system.tasks_directory", "tasks")
     task_persistence = TaskPersistence(directory=paths.log_directory / tasks_dir_name)
     task_repository = TaskRepository(persistence=task_persistence)
     task_manager = TaskManager(repository=task_repository, event_bus=event_bus, logger=logger)
     task_api = TaskAPI(repository=task_repository)
 
-    # Execute task recovery for any active tasks on startup
-    task_recovery = TaskRecovery(repository=task_repository, event_bus=event_bus, logger=logger)
-    recovered_count = task_recovery.recover_tasks()
+    return {
+        "task_persistence": task_persistence,
+        "task_repository": task_repository,
+        "task_manager": task_manager,
+        "task_api": task_api,
+        "recovered_count": 0,
+    }
 
-    event_bus.emit(
-        Event(
-            name="TaskSystemInitialized",
-            source="kernel.boot",
-            payload={"recovered_tasks": recovered_count},
-        )
-    )
 
-    # --- Milestone 5: Workflow Engine Initialization ---
+def _init_workflow_engine(
+    config_manager: ConfigurationManager,
+    event_bus: EventBus,
+    logger: logging.Logger,
+    paths: BootPaths,
+) -> dict[str, Any]:
     wf_dir_name = config_manager.get("workflow_engine.workflows_directory", "workflows")
     wf_persistence = WorkflowPersistence(directory=paths.log_directory / wf_dir_name)
     workflow_manager = WorkflowManager(persistence=wf_persistence, event_bus=event_bus, logger=logger)
     workflow_api = WorkflowAPI(manager=workflow_manager)
+    return {
+        "wf_persistence": wf_persistence,
+        "workflow_manager": workflow_manager,
+        "workflow_api": workflow_api,
+    }
 
-    event_bus.emit(
-        Event(
-            name="WorkflowEngineInitialized",
-            source="kernel.boot",
-            payload={},
-        )
-    )
 
-    # --- Milestone 6: Worker Runtime Initialization ---
+def _init_worker_runtime(event_bus: EventBus, logger: logging.Logger) -> dict[str, Any]:
     class BootResultWrapper:
         def __init__(self):
             self.boot_result = None
@@ -436,16 +501,22 @@ def run_boot_sequence(paths: BootPaths) -> BootResult:
         logger=logger,
     )
     worker_api = WorkerAPI(manager=worker_manager)
+    return {
+        "worker_manager": worker_manager,
+        "worker_api": worker_api,
+        "result_wrapper": result_wrapper,
+    }
 
-    event_bus.emit(
-        Event(
-            name="WorkerRuntimeInitialized",
-            source="kernel.boot",
-            payload={},
-        )
-    )
 
-    # --- Milestone 7: Scheduler Initialization ---
+def _init_scheduler(r: dict[str, Any]) -> dict[str, Any]:
+    config_manager = r["Configuration Manager"]
+    task_manager = r["Task System"]["task_manager"]
+    workflow_manager = r["Workflow Engine"]["workflow_manager"]
+    capability_registry = r["Capability Registry"]
+    worker_manager = r["Worker Runtime"]["worker_manager"]
+    event_bus = r["Event Manager"].event_bus
+    logger = r["Logger"]
+
     scheduler_max_retries = config_manager.get("scheduler.max_retries", 3)
     scheduler_retry_delay = config_manager.get("scheduler.retry_delay", 1.0)
     scheduler = Scheduler(
@@ -459,37 +530,13 @@ def run_boot_sequence(paths: BootPaths) -> BootResult:
         retry_delay=scheduler_retry_delay,
     )
     scheduler_api = SchedulerAPI(scheduler=scheduler)
+    return {
+        "scheduler": scheduler,
+        "scheduler_api": scheduler_api,
+    }
 
-    event_bus.emit(
-        Event(
-            name="SchedulerInitialized",
-            source="kernel.boot",
-            payload={},
-        )
-    )
 
-    # --- Integration of remaining subsystems ---
-    
-    # 2. Observability
-    log_file = paths.log_directory / "realtimex.log"
-    audit_file = paths.log_directory / "security_audit.log"
-    observability = Observability(
-        event_bus=event_bus,
-        config_dir=str(paths.config_path.parent),
-        log_filepath=str(log_file),
-        audit_filepath=str(audit_file)
-    )
-    
-    # 3. Policy Manager
-    policy_dir = paths.config_path.parent / "policies"
-    os.makedirs(policy_dir, exist_ok=True)
-    policy_manager = PolicyManager(event_bus=event_bus, policy_dir=str(policy_dir))
-    
-    # 4. Security Manager
-    sec_audit_file = paths.log_directory / "security_violations.log"
-    security_manager = SecurityManager(event_bus=event_bus, audit_filepath=str(sec_audit_file))
-    
-    # 5. Interface Manager
+def _init_interface_manager(event_bus: EventBus, config_manager: ConfigurationManager) -> InterfaceManager:
     rest_port = config_manager.get("interfaces.rest_port", 8000)
     ws_port = config_manager.get("interfaces.websocket_port", 8001)
 
@@ -501,100 +548,269 @@ def run_boot_sequence(paths: BootPaths) -> BootResult:
     interface_manager.register_interface(RESTInterface(port=rest_port))
     interface_manager.register_interface(WebSocketInterface(port=ws_port))
     interface_manager.start_all()
-    
-    # 6. Memory Manager
-    memory_persistence = FileMemoryPersistence(directory=paths.log_directory / "memory")
-    memory_policy = MemoryPolicy()
-    memory_manager = MemoryManager(
-        persistence=memory_persistence,
-        event_bus=event_bus,
-        policy=memory_policy
-    )
-    
-    # 7. Model Gateway
+    return interface_manager
+
+
+def _init_model_gateway(event_bus: EventBus, service_registry: ServiceRegistry, capability_registry: CapabilityRegistry) -> ModelGateway:
     model_gateway = ModelGateway(event_bus=event_bus)
+    from services.base import SimpleService
     service_registry.register(SimpleService("model_gateway", {"gateway": model_gateway}))
     service_registry.register(SimpleService("capability_registry", {"registry": capability_registry}))
-    
-    # 8. Cognitive Engine
-    cognitive_engine = CognitiveEngine(
-        reasoning_provider=MockReasoningProvider(),
-        task_manager=task_manager,
-        workflow_manager=workflow_manager,
-        event_manager=event_manager
-    )
-    
-    # 9. Permission Manager
-    permission_persistence = PermissionPersistence(directory=paths.log_directory / "permissions")
-    permission_policy = PermissionPolicy()
-    permission_manager = PermissionManager(
-        persistence=permission_persistence,
-        event_bus=event_bus,
-        cognitive_engine=cognitive_engine,
-        policy=permission_policy
-    )
+    return model_gateway
 
+
+def _init_policy_manager(event_bus: EventBus, paths: BootPaths) -> PolicyManager:
+    policy_dir = paths.config_path.parent / "policies"
+    os.makedirs(policy_dir, exist_ok=True)
+    return PolicyManager(event_bus=event_bus, policy_dir=str(policy_dir))
+
+
+def run_boot_sequence(paths: BootPaths) -> BootResult:
+    """
+    Execute the full Kernel boot sequence in order, emitting an event
+    after each step.
+
+    Args:
+        paths: Filesystem locations required during boot.
+
+    Returns:
+        A BootResult containing every component initialized during boot.
+    """
+    profiler = BootProfiler()
+
+    bootstrap_logger = logging.getLogger("realtimex.bootstrap")
+    if not bootstrap_logger.handlers:
+        bootstrap_logger.addHandler(logging.StreamHandler())
+        bootstrap_logger.setLevel(logging.INFO)
+        bootstrap_logger.propagate = False
+
+    emit_boot_started(logger=bootstrap_logger)
+
+    # Define tasks
+    tasks = [
+        BootTask(
+            name="Configuration",
+            deps=[],
+            fn=lambda r: load_configuration(paths.config_path),
+        ),
+        BootTask(
+            name="Logger",
+            deps=["Configuration"],
+            fn=lambda r: initialize_logger(paths.log_directory, r["Configuration"]),
+        ),
+        BootTask(
+            name="Event Manager",
+            deps=["Logger", "Configuration"],
+            fn=lambda r: initialize_event_manager(r["Logger"], paths.log_directory, r["Configuration"]),
+        ),
+        BootTask(
+            name="Configuration Manager",
+            deps=["Event Manager"],
+            fn=lambda r: _init_config_manager(r["Event Manager"].event_bus, paths),
+        ),
+        BootTask(
+            name="Service Registry",
+            deps=["Event Manager", "Logger"],
+            fn=lambda r: _init_service_registry(r["Logger"]),
+        ),
+        BootTask(
+            name="Capability Registry",
+            deps=["Event Manager"],
+            fn=lambda r: _init_capability_registry(),
+        ),
+        BootTask(
+            name="Recovery Manager",
+            deps=["Configuration Manager", "Event Manager", "Logger"],
+            fn=lambda r: initialize_recovery_manager(r["Configuration Manager"], r["Event Manager"].event_bus, r["Logger"], paths.log_directory),
+        ),
+        BootTask(
+            name="Task System",
+            deps=["Configuration Manager", "Event Manager", "Logger"],
+            fn=lambda r: _init_task_system(r["Configuration Manager"], r["Event Manager"].event_bus, r["Logger"], paths),
+        ),
+        BootTask(
+            name="Workflow Engine",
+            deps=["Configuration Manager", "Event Manager", "Logger"],
+            fn=lambda r: _init_workflow_engine(r["Configuration Manager"], r["Event Manager"].event_bus, r["Logger"], paths),
+        ),
+        BootTask(
+            name="Worker Runtime",
+            deps=["Event Manager", "Logger"],
+            fn=lambda r: _init_worker_runtime(r["Event Manager"].event_bus, r["Logger"]),
+        ),
+        BootTask(
+            name="Scheduler",
+            deps=["Task System", "Workflow Engine", "Capability Registry", "Worker Runtime", "Logger", "Event Manager", "Configuration Manager"],
+            fn=lambda r: _init_scheduler(r),
+        ),
+        BootTask(
+            name="Observability",
+            deps=["Event Manager", "Configuration Manager"],
+            fn=lambda r: Observability(
+                event_bus=r["Event Manager"].event_bus,
+                config_dir=str(paths.config_path.parent),
+                log_filepath=str(paths.log_directory / "realtimex.log"),
+                audit_filepath=str(paths.log_directory / "security_audit.log"),
+            ),
+        ),
+        BootTask(
+            name="Policy Manager",
+            deps=["Event Manager", "Configuration Manager"],
+            fn=lambda r: _init_policy_manager(r["Event Manager"].event_bus, paths),
+        ),
+        BootTask(
+            name="Security Manager",
+            deps=["Event Manager", "Logger"],
+            fn=lambda r: SecurityManager(event_bus=r["Event Manager"].event_bus, audit_filepath=str(paths.log_directory / "security_violations.log")),
+        ),
+        BootTask(
+            name="Interface Manager",
+            deps=["Event Manager", "Configuration Manager"],
+            fn=lambda r: _init_interface_manager(r["Event Manager"].event_bus, r["Configuration Manager"]),
+        ),
+        BootTask(
+            name="Memory Manager",
+            deps=["Event Manager"],
+            fn=lambda r: MemoryManager(
+                persistence=FileMemoryPersistence(directory=paths.log_directory / "memory"),
+                event_bus=r["Event Manager"].event_bus,
+                policy=MemoryPolicy(),
+            ),
+        ),
+        BootTask(
+            name="Model Gateway",
+            deps=["Event Manager", "Service Registry", "Capability Registry"],
+            fn=lambda r: _init_model_gateway(r["Event Manager"].event_bus, r["Service Registry"], r["Capability Registry"]),
+        ),
+        BootTask(
+            name="Cognitive Engine",
+            deps=["Event Manager", "Task System", "Workflow Engine"],
+            fn=lambda r: CognitiveEngine(
+                reasoning_provider=MockReasoningProvider(),
+                task_manager=r["Task System"]["task_manager"],
+                workflow_manager=r["Workflow Engine"]["workflow_manager"],
+                event_manager=r["Event Manager"],
+            ),
+        ),
+        BootTask(
+            name="Permission Manager",
+            deps=["Event Manager", "Cognitive Engine"],
+            fn=lambda r: PermissionManager(
+                persistence=PermissionPersistence(directory=paths.log_directory / "permissions"),
+                event_bus=r["Event Manager"].event_bus,
+                cognitive_engine=r["Cognitive Engine"],
+                policy=PermissionPolicy(),
+            ),
+        ),
+    ]
+
+    # Execute scheduler
+    boot_sched = BootScheduler(tasks, profiler)
+    resolved = boot_sched.execute()
+
+    # Emit late-initialized lifecycle messages (analogous to sequential events)
+    event_bus = resolved["Event Manager"].event_bus
+    config_manager = resolved["Configuration Manager"]
+    logger = resolved["Logger"]
+    event_bus.emit(Event(name=KernelEventType.KERNEL_BOOT_STARTED, source="kernel.boot"))
+    event_bus.emit(
+        Event(
+            name=KernelEventType.CONFIGURATION_LOADED,
+            source="kernel.boot",
+            payload={"config_path": str(paths.config_path)},
+        )
+    )
+    event_bus.emit(Event(name=KernelEventType.LOGGER_INITIALIZED, source="kernel.boot"))
+    event_bus.emit(Event(name=KernelEventType.EVENT_BUS_INITIALIZED, source="kernel.boot"))
+    event_bus.emit(Event(name=KernelEventType.SERVICE_REGISTRY_INITIALIZED, source="kernel.boot"))
+    event_bus.emit(Event(name=KernelEventType.CAPABILITY_REGISTRY_INITIALIZED, source="kernel.boot"))
+    event_bus.emit(Event(name=KernelEventType.RECOVERY_INITIALIZED, source="kernel.boot"))
+    event_bus.emit(
+        Event(
+            name="TaskSystemInitialized",
+            source="kernel.boot",
+            payload={"recovered_tasks": resolved["Task System"]["recovered_count"]},
+        )
+    )
+    event_bus.emit(Event(name="WorkflowEngineInitialized", source="kernel.boot", payload={}))
+    event_bus.emit(Event(name="WorkerRuntimeInitialized", source="kernel.boot", payload={}))
+    event_bus.emit(Event(name="SchedulerInitialized", source="kernel.boot", payload={}))
+
+    # Build Module Loader
     module_loader = build_module_loader(
         modules_root=paths.modules_root,
-        capability_registry=capability_registry,
-        service_registry=service_registry,
+        capability_registry=resolved["Capability Registry"],
+        service_registry=resolved["Service Registry"],
         event_bus=event_bus,
         logger=logger,
+        boot_profiler=profiler,
     )
 
-    # Start Scheduler loop only after all systems are fully booted and resolved
-    scheduler.start()
+    # Start Scheduler loop
+    resolved["Scheduler"]["scheduler"].start()
 
     # Populate Dependency Container
     dependency_container = DependencyContainer()
     dependency_container.register("config_manager", config_manager)
-    dependency_container.register("event_manager", event_manager)
+    dependency_container.register("event_manager", resolved["Event Manager"])
     dependency_container.register("event_bus", event_bus)
-    dependency_container.register("service_registry", service_registry)
-    dependency_container.register("capability_registry", capability_registry)
-    dependency_container.register("recovery_manager", recovery_manager)
-    dependency_container.register("task_manager", task_manager)
-    dependency_container.register("workflow_manager", workflow_manager)
-    dependency_container.register("worker_manager", worker_manager)
-    dependency_container.register("scheduler", scheduler)
-    dependency_container.register("observability", observability)
-    dependency_container.register("policy_manager", policy_manager)
-    dependency_container.register("security_manager", security_manager)
-    dependency_container.register("interface_manager", interface_manager)
-    dependency_container.register("memory_manager", memory_manager)
-    dependency_container.register("model_gateway", model_gateway)
-    dependency_container.register("cognitive_engine", cognitive_engine)
-    dependency_container.register("permission_manager", permission_manager)
+    dependency_container.register("service_registry", resolved["Service Registry"])
+    dependency_container.register("capability_registry", resolved["Capability Registry"])
+    dependency_container.register("recovery_manager", resolved["Recovery Manager"])
+    dependency_container.register("task_manager", resolved["Task System"]["task_manager"])
+    dependency_container.register("workflow_manager", resolved["Workflow Engine"]["workflow_manager"])
+    dependency_container.register("worker_manager", resolved["Worker Runtime"]["worker_manager"])
+    dependency_container.register("scheduler", resolved["Scheduler"]["scheduler"])
+    dependency_container.register("observability", resolved["Observability"])
+    dependency_container.register("policy_manager", resolved["Policy Manager"])
+    dependency_container.register("security_manager", resolved["Security Manager"])
+    dependency_container.register("interface_manager", resolved["Interface Manager"])
+    dependency_container.register("memory_manager", resolved["Memory Manager"])
+    dependency_container.register("model_gateway", resolved["Model Gateway"])
+    dependency_container.register("cognitive_engine", resolved["Cognitive Engine"])
+    dependency_container.register("permission_manager", resolved["Permission Manager"])
+    dependency_container.register("platform", Platform.current())
+
+    # Register workflow_manager and memory_manager in service registry for module access
+    from services.base import SimpleService
+    resolved["Service Registry"].register(
+        SimpleService("workflow_manager", {"manager": resolved["Workflow Engine"]["workflow_manager"]})
+    )
+    resolved["Service Registry"].register(
+        SimpleService("memory_manager", {"manager": resolved["Memory Manager"]})
+    )
 
     boot_result = BootResult(
         config_manager=config_manager,
-        config=config,
+        config=resolved["Configuration"],
         logger=logger,
         event_bus=event_bus,
-        event_manager=event_manager,
-        service_registry=service_registry,
-        capability_registry=capability_registry,
-        recovery_manager=recovery_manager,
+        event_manager=resolved["Event Manager"],
+        service_registry=resolved["Service Registry"],
+        capability_registry=resolved["Capability Registry"],
+        recovery_manager=resolved["Recovery Manager"],
         module_loader=module_loader,
-        task_manager=task_manager,
-        task_api=task_api,
-        workflow_manager=workflow_manager,
-        workflow_api=workflow_api,
-        worker_manager=worker_manager,
-        worker_api=worker_api,
-        scheduler=scheduler,
-        scheduler_api=scheduler_api,
+        task_manager=resolved["Task System"]["task_manager"],
+        task_api=resolved["Task System"]["task_api"],
+        workflow_manager=resolved["Workflow Engine"]["workflow_manager"],
+        workflow_api=resolved["Workflow Engine"]["workflow_api"],
+        worker_manager=resolved["Worker Runtime"]["worker_manager"],
+        worker_api=resolved["Worker Runtime"]["worker_api"],
+        scheduler=resolved["Scheduler"]["scheduler"],
+        scheduler_api=resolved["Scheduler"]["scheduler_api"],
         loaded_modules=[],
-        observability=observability,
-        policy_manager=policy_manager,
-        security_manager=security_manager,
-        interface_manager=interface_manager,
-        memory_manager=memory_manager,
-        model_gateway=model_gateway,
-        cognitive_engine=cognitive_engine,
-        permission_manager=permission_manager,
+        observability=resolved["Observability"],
+        policy_manager=resolved["Policy Manager"],
+        security_manager=resolved["Security Manager"],
+        interface_manager=resolved["Interface Manager"],
+        memory_manager=resolved["Memory Manager"],
+        model_gateway=resolved["Model Gateway"],
+        cognitive_engine=resolved["Cognitive Engine"],
+        permission_manager=resolved["Permission Manager"],
         dependency_container=dependency_container,
+        boot_profiler=profiler,
+        platform=Platform.current(),
     )
-    result_wrapper.boot_result = boot_result
+    resolved["Worker Runtime"]["result_wrapper"].boot_result = boot_result
 
     return boot_result

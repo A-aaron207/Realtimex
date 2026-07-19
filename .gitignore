@@ -19,3 +19,4 @@ temp/
 tmp/
 scratch/
 .gemini/
+.env

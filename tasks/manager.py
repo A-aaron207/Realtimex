@@ -47,6 +47,7 @@ class TaskManager:
         self._event_bus = event_bus
         self._logger = logger
         self._lock = threading.RLock()
+        self.recovery_status = "pending"
 
     def create_task(
         self,
@@ -367,3 +368,41 @@ class TaskManager:
             if completed_only:
                 return self._repository.list_completed()
             return self._repository.list_all()
+
+    def start_background_recovery(self) -> None:
+        """
+        Start the task recovery process in a background thread.
+        """
+        with self._lock:
+            if self.recovery_status != "pending":
+                return
+            self.recovery_status = "running"
+            
+        def _run() -> None:
+            try:
+                from tasks.recovery import TaskRecovery
+                recovery = TaskRecovery(
+                    repository=self._repository,
+                    event_bus=self._event_bus,
+                    logger=self._logger
+                )
+                recovered_count = recovery.recover_tasks()
+                with self._lock:
+                    self.recovery_status = "completed"
+                self._event_bus.publish(
+                    Event(
+                        name="TaskRecoveryCompleted",
+                        source="tasks.manager",
+                        payload={"recovered_count": recovered_count}
+                    )
+                )
+            except Exception as e:
+                self._logger.error("Task recovery background execution failed: %s", e)
+                with self._lock:
+                    self.recovery_status = "failed"
+
+        threading.Thread(
+            target=_run,
+            name="TaskRecoveryBackgroundWorker",
+            daemon=True
+        ).start()

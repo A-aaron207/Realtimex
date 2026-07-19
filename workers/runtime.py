@@ -95,6 +95,45 @@ class WorkerRuntime(BaseWorker):
         artifacts: list[dict[str, Any]] = []
         output_data: dict[str, Any] = {}
 
+        # Resolve any dynamic output references in context.input
+        resolved_input = dict(context.input)
+        for key, val in resolved_input.items():
+            if isinstance(val, str) and val.startswith("Process ") and val.endswith(" output"):
+                dep_step_id = val[8:-7].strip()
+                try:
+                    from services.registry import ServiceRegistry
+                    reg = ServiceRegistry.get_instance()
+                    wf_engine = reg.get("workflow_manager")
+                    if wf_engine:
+                        wf_mgr = wf_engine.metadata["manager"]
+                        workflow = wf_mgr.load_workflow(context.workflow_id)
+                        dep_step = workflow.steps.get(dep_step_id)
+                        if dep_step and dep_step.output_data:
+                            # Extract string output from output_data
+                            output_val = (
+                                dep_step.output_data.get("output")
+                                or dep_step.output_data.get("code")
+                                or dep_step.output_data.get("summary")
+                                or dep_step.output_data.get("results")
+                                or str(dep_step.output_data)
+                            )
+                            resolved_input[key] = output_val
+                except Exception as e:
+                    self._logger.debug("Failed to resolve step parameter %s -> %s: %s", key, val, e)
+
+        # Reconstruct context with resolved input
+        context = ExecutionContext(
+            task_id=context.task_id,
+            workflow_id=context.workflow_id,
+            step_id=context.step_id,
+            capability=context.capability,
+            input=resolved_input,
+            memory_reference=context.memory_reference,
+            configuration=context.configuration,
+            permissions=context.permissions,
+            metadata=context.metadata,
+        )
+
         try:
             # 2. Resolve capability module
             # We assume the scheduler matched capabilities. We query the resolver
@@ -117,12 +156,21 @@ class WorkerRuntime(BaseWorker):
             if hasattr(module_instance, "execute") and callable(getattr(module_instance, "execute")):
                 self._logger.debug("Executing capability via standardized contract: %s.execute(%r)", module_id, capability_name)
                 try:
-                    output_data = module_instance.execute(capability_name, context)
-                except TypeError:
                     try:
-                        output_data = module_instance.execute(context)
+                        output_data = module_instance.execute(capability_name, context)
                     except TypeError:
-                        output_data = module_instance.execute(capability_name, context.input)
+                        try:
+                            output_data = module_instance.execute(context)
+                        except TypeError:
+                            output_data = module_instance.execute(capability_name, context.input)
+                except NotImplementedError:
+                    self._logger.warning(
+                        "Module '%s' raised NotImplementedError for capability '%s'. Simulating execution...",
+                        module_id,
+                        capability_name,
+                    )
+                    output_data = self._simulate_fallback(capability_name, context.input)
+                    warnings.append(f"Simulated execution. Method '{capability_name}' not implemented in module.")
             elif hasattr(module_instance, capability_name):
                 method = getattr(module_instance, capability_name)
                 if callable(method):

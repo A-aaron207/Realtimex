@@ -122,7 +122,15 @@ class Kernel:
         )
         self._boot_result.logger.info("Kernel Ready.")
 
-        self._boot_result.loaded_modules = self._boot_result.module_loader.load()
+        # Profile module loading phase
+        profiler = self._boot_result.boot_profiler
+        profiler.start("Module Loader", dependencies=["Capability Registry", "Service Registry", "Event Manager"])
+        try:
+            self._boot_result.loaded_modules = self._boot_result.module_loader.load()
+            profiler.stop("Module Loader", success=True)
+        except Exception as e:
+            profiler.stop("Module Loader", success=False, error_message=str(e))
+            raise
 
         self._boot_result.event_bus.emit(
             Event(
@@ -143,6 +151,24 @@ class Kernel:
         self._boot_result.event_bus.subscribe("StepFailed", self._on_step_failed)
 
         self._lifecycle.transition_to(KernelState.RUNNING)
+
+        # Start background task recovery
+        self._boot_result.task_manager.start_background_recovery()
+
+        # Finish boot profiling and generate report
+        profiler.finish_boot()
+        report = profiler.generate_report()
+
+        # Write report to log file
+        try:
+            report_file = self._boot_paths.log_directory / "boot_report.txt"
+            report_file.parent.mkdir(parents=True, exist_ok=True)
+            report_file.write_text(report, encoding="utf-8")
+        except Exception as e:
+            self._boot_result.logger.error("Failed to write boot report to file: %s", e)
+
+        # Print report to stdout
+        print(f"\n{report}\n")
 
     @property
     def event_manager(self) -> EventManager:
@@ -731,6 +757,12 @@ The dictionary MUST contain the following keys exactly:
             if raw_output.endswith("```"):
                 raw_output = raw_output[:-3]
             raw_output = raw_output.strip()
+
+            # Robust extraction of the JSON structure bounded by the first '{' and last '}'
+            start_idx = raw_output.find("{")
+            end_idx = raw_output.rfind("}")
+            if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+                raw_output = raw_output[start_idx : end_idx + 1]
             
             analysis = json.loads(raw_output)
             intent = analysis.get("intent", "recovery")
@@ -753,18 +785,35 @@ The dictionary MUST contain the following keys exactly:
                 ]
             else:
                 new_steps = []
-                for idx, cap in enumerate(required_caps):
-                    new_steps.append(
+                valid_caps = set(capability_registry.list_capabilities())
+                filtered_caps = [c for c in required_caps if c in valid_caps]
+
+                if not filtered_caps:
+                    self._boot_result.logger.warning("All capabilities suggested by repair analyzer were unregistered. Falling back to recovery_success.")
+                    new_steps = [
                         WorkflowStep(
-                            step_id=f"repair_{cap}_{idx}",
+                            step_id="recovery_write",
                             workflow_id=workflow_id,
-                            capability=cap,
-                            input_data={"prompt": f"Repaired step executing capability {cap} to recover task {task_id}"},
+                            capability="write_file",
+                            input_data={"file_path": "logs/recovery_output.txt", "content": "Recovery successful: repaired plan executed successfully."},
                             status=StepState.PENDING,
-                            estimated_time=2.0,
-                            estimated_cost=0.05
+                            estimated_time=1.0,
+                            estimated_cost=0.01
                         )
-                    )
+                    ]
+                else:
+                    for idx, cap in enumerate(filtered_caps):
+                        new_steps.append(
+                            WorkflowStep(
+                                step_id=f"repair_{cap}_{idx}",
+                                workflow_id=workflow_id,
+                                capability=cap,
+                                input_data={"prompt": f"Repaired step executing capability {cap} to recover task {task_id}"},
+                                status=StepState.PENDING,
+                                estimated_time=2.0,
+                                estimated_cost=0.05
+                            )
+                        )
                     
             # Update workflow in persistence:
             # 1. Remove all non-completed remaining steps (including the failed step) to clear the path

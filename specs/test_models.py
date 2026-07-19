@@ -78,6 +78,8 @@ class TestModelGateway(unittest.IsolatedAsyncioTestCase):
         self.assertIn("groq", providers)
         self.assertIn("nvidia", providers)
         self.assertIn("openai_compatible", providers)
+        self.assertIn("openrouter", providers)
+        self.assertIn("gemini", providers)
 
         models = self.gateway.list_models()
         model_names = [m.model_name for m in models]
@@ -87,7 +89,7 @@ class TestModelGateway(unittest.IsolatedAsyncioTestCase):
 
         # Check emitted ProviderRegistered events
         emitted_names = [e.name for e in self.event_bus.emitted]
-        self.assertEqual(emitted_names.count("ProviderRegistered"), 3)
+        self.assertEqual(emitted_names.count("ProviderRegistered"), 5)
 
     async def test_model_selection_capabilities(self) -> None:
         """Verify model selection based on capability capabilities and preferences."""

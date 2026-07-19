@@ -107,6 +107,7 @@ class Dispatcher:
         if not allocation:
             # Re-enqueue and retry later: no idle worker available
             self._logger.debug("Re-enqueuing step %s due to worker unavailability", step.step_id)
+            time.sleep(0.1)  # Throttle to avoid hot-loop thread thrashing
             self._re_enqueue_fn(step, datetime.now(timezone.utc))
             with self._active_jobs_lock:
                 self._active_jobs.pop(step.step_id, None)

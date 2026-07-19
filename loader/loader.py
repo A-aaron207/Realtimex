@@ -31,6 +31,10 @@ from loader.module_base import ModuleEntryPoint
 from loader.validator import ManifestValidationError, ManifestValidator, ModuleManifest
 from services.registry import ServiceRegistry
 
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from kernel.profiler import BootProfiler
+
 
 class ModuleImportError(Exception):
     """Raised when a module's module.py cannot be imported or lacks a valid entry point."""
@@ -101,6 +105,7 @@ class ModuleLoader:
         service_registry: ServiceRegistry,
         event_bus: EventBus,
         logger: logging.Logger,
+        boot_profiler: BootProfiler | None = None,
     ) -> None:
         """
         Initialize the Module Loader.
@@ -122,6 +127,7 @@ class ModuleLoader:
         self._event_bus = event_bus
         self._logger = logger
         self._lock = threading.RLock()
+        self._boot_profiler = boot_profiler
 
         self._loaded_modules: dict[str, LoadedModule] = {}
         self._failures: list[ModuleLoadFailure] = []
@@ -225,10 +231,16 @@ class ModuleLoader:
             discovered: The discovery record for this module.
             manifest: The validated manifest for this module.
         """
+        module_name = manifest.name or manifest.module_id
+        if self._boot_profiler:
+            self._boot_profiler.start(module_name, dependencies=["Module Loader"])
+
         try:
             instance = self._import_entry_point(discovered, manifest)
         except ModuleImportError as error:
             self._fail_module(manifest.module_id, "import", str(error))
+            if self._boot_profiler:
+                self._boot_profiler.stop(module_name, success=False, error_message=str(error))
             return
 
         with self._lock:
@@ -254,6 +266,8 @@ class ModuleLoader:
                 },
             )
         )
+        if self._boot_profiler:
+            self._boot_profiler.stop(module_name, success=True)
 
     def _import_entry_point(self, discovered: DiscoveredModule, manifest: ModuleManifest) -> ModuleEntryPoint:
         """

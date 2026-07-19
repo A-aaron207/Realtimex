@@ -53,15 +53,18 @@ class KernelLogger:
             The configured root Kernel logger.
         """
         root_logger = logging.getLogger(cls._ROOT_LOGGER_NAME)
+        resolved_level = getattr(logging, level.upper(), logging.INFO)
+        root_logger.setLevel(resolved_level)
 
         if cls._configured:
+            # Update levels of existing handlers to reflect configuration updates
+            for handler in root_logger.handlers:
+                handler.setLevel(resolved_level)
             return root_logger
 
         log_directory.mkdir(parents=True, exist_ok=True)
         log_path = log_directory / log_filename
 
-        resolved_level = getattr(logging, level.upper(), logging.INFO)
-        root_logger.setLevel(resolved_level)
         root_logger.propagate = False
 
         formatter = logging.Formatter(fmt=cls._LOG_FORMAT, datefmt=cls._DATE_FORMAT)

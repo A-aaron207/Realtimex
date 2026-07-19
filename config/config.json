@@ -1,11 +1,11 @@
 {
   "kernel": {
     "name": "realtimex-kernel",
-    "version": "0.5.0",
-    "environment": "development"
+    "version": "1.0.0",
+    "environment": "production"
   },
   "logging": {
-    "level": "INFO",
+    "level": "DEBUG",
     "filename": "kernel.log"
   },
   "event_bus": {
@@ -30,5 +30,25 @@
   },
   "recovery_manager": {
     "enabled": true
+  },
+  "model_gateway": {
+    "default_provider": "openrouter",
+    "providers": {
+      "anthropic": {
+        "model": "claude-3-5-sonnet"
+      },
+      "openai": {
+        "model": "gpt-4o"
+      },
+      "openrouter": {
+        "model": "meta-llama/llama-3.1-70b-instruct"
+      },
+      "gemini": {
+        "model": "gemini-1.5-pro"
+      },
+      "mock": {
+        "model": "mock-model"
+      }
+    }
   }
 }

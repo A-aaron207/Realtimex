@@ -9,6 +9,7 @@ import time
 from typing import Any, AsyncIterator
 
 from models.provider import ModelRequest, ModelResponse, ProviderAdapter
+from models.exceptions import ProviderUnavailableError
 
 
 class NvidiaAdapter(ProviderAdapter):
@@ -40,6 +41,9 @@ class NvidiaAdapter(ProviderAdapter):
     async def generate(self, model: str, request: ModelRequest) -> ModelResponse:
         start_time = time.time()
         
+        if not self.api_key or self.api_key.startswith("mock_") or len(self.api_key.strip()) <= 5:
+            raise ProviderUnavailableError("Nvidia API key not configured or invalid.")
+
         # Simulate API network delay (nemotron is a bit larger)
         latency = 0.22 + (len(request.prompt) * 0.0003)
         await asyncio.sleep(latency)

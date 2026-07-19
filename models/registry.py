@@ -26,6 +26,7 @@ class ModelMetadata:
     health_status: str = "healthy"  # "healthy", "degraded", "unhealthy"
     cost_metadata: dict[str, float] = field(default_factory=lambda: {"input_cost_1k": 0.0, "output_cost_1k": 0.0})
     rate_limits: dict[str, int] = field(default_factory=lambda: {"rpm": 60, "tpm": 40000})
+    is_open_source: bool = True
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -38,6 +39,7 @@ class ModelMetadata:
             "health_status": self.health_status,
             "cost_metadata": self.cost_metadata,
             "rate_limits": self.rate_limits,
+            "is_open_source": self.is_open_source,
         }
 
     @classmethod
@@ -52,6 +54,7 @@ class ModelMetadata:
             health_status=data.get("health_status", "healthy"),
             cost_metadata=data.get("cost_metadata", {}),
             rate_limits=data.get("rate_limits", {}),
+            is_open_source=bool(data.get("is_open_source", True)),
         )
 
 

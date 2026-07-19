@@ -67,7 +67,7 @@ class DependencyResolver:
             return False
 
         # 2. Check task state
-        if task.state in {TaskState.PAUSED, TaskState.CANCELLED, TaskState.FAILED, TaskState.COMPLETED}:
+        if task.state not in {TaskState.RUNNING, TaskState.RETRYING, TaskState.QUEUED}:
             self._logger.debug(
                 "Cannot dispatch step %s: Parent task %s is in state %s",
                 step.step_id,
@@ -98,7 +98,7 @@ class DependencyResolver:
             return False
 
         # 5. Check worker availability in pool
-        pool = self._worker_manager._pools.get(step.capability)
+        pool = self._worker_manager.get_pool(step.capability)
         if not pool:
             self._logger.debug("No worker pool exists for step %s capability '%s'", step.step_id, step.capability)
             return False
