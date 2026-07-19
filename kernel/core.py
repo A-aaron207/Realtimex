@@ -28,11 +28,16 @@ if TYPE_CHECKING:
     from scheduler.api import SchedulerAPI
     from scheduler.scheduler import Scheduler
 
+import time
 from events.event import Event
 from events.event_types import KernelEventType
 from kernel.boot import BootPaths, BootResult, run_boot_sequence
 from kernel.lifecycle import KernelState, LifecycleManager
 from kernel.shutdown import run_shutdown_sequence
+from interfaces.base import Request, Response
+from tasks.states import TaskState
+from tasks.task import TaskPriority
+
 
 
 class Kernel:
@@ -68,6 +73,7 @@ class Kernel:
         )
         self._lifecycle = LifecycleManager(initial_state=KernelState.OFFLINE)
         self._boot_result: BootResult | None = None
+        self._pending_requests: dict[str, Request] = {}
 
     @property
     def state(self) -> KernelState:
@@ -128,6 +134,12 @@ class Kernel:
         self._boot_result.logger.info(
             "Kernel Operational. Loaded modules: %d", len(self._boot_result.loaded_modules)
         )
+
+        # Register request handler on interface manager
+        self._boot_result.interface_manager.set_request_handler(self.handle_request)
+
+        # Subscribe to StepCompleted event to progress workflows automatically
+        self._boot_result.event_bus.subscribe("StepCompleted", self._on_step_completed)
 
         self._lifecycle.transition_to(KernelState.RUNNING)
 
@@ -444,3 +456,108 @@ class Kernel:
             )
 
         return summary
+
+    def handle_request(self, request: Request) -> Response:
+        """
+        Handle incoming requests from interfaces.
+        """
+        action = request.user_input.get("action", "").lower()
+        if action == "summarize":
+            args = request.user_input.get("args", [])
+            if len(args) >= 2 and args[0] == "this" and args[1] == "text:":
+                text_to_summarize = " ".join(args[2:])
+            else:
+                text_to_summarize = " ".join(args)
+            
+            # 1. Task Created
+            task = self.task_manager.create_task(
+                goal=f"Summarize text: {text_to_summarize}",
+                priority=TaskPriority.NORMAL
+            )
+            
+            # Map task ID to Request
+            self._pending_requests[task.task_id] = request
+            
+            # Progress Task lifecycle
+            self.task_manager.update_state(task.task_id, TaskState.PLANNING)
+            self.task_manager.update_state(task.task_id, TaskState.QUEUED)
+            self.task_manager.update_state(task.task_id, TaskState.RUNNING)
+            
+            # 2. Workflow Generated
+            wf = self.workflow_manager.create_workflow(task.task_id, task.goal)
+            
+            # 3. Schedule initial steps
+            ready_steps = self.workflow_manager.ready_steps(wf.workflow_id)
+            for step in ready_steps:
+                self.scheduler_api.schedule(step)
+                
+            return Response(
+                request_id=request.request_id,
+                status="running",
+                message=f"Summarization task {task.task_id} is running.",
+                metadata={"task_id": task.task_id}
+            )
+        else:
+            return Response(
+                request_id=request.request_id,
+                status="error",
+                message=f"Unknown action: {action}"
+            )
+
+    def _on_step_completed(self, event: Event) -> None:
+        """
+        Triggered when a workflow step completes. Progresses the workflow.
+        """
+        step_id = event.payload.get("step_id")
+        workflow_id = event.task_id  # Event task_id stores workflow_id for steps
+        
+        try:
+            # Give a tiny time for DB/cache state to align
+            time.sleep(0.05)
+            
+            workflow = self.workflow_manager.load_workflow(workflow_id)
+            task_id = workflow.parent_task_id
+            
+            # Fetch next ready steps
+            next_ready = self.workflow_manager.ready_steps(workflow_id)
+            if next_ready:
+                for step in next_ready:
+                    self.scheduler_api.schedule(step)
+            else:
+                # No more ready steps. Check if workflow completed.
+                wf_current = self.workflow_manager.load_workflow(workflow_id)
+                from workflow.step import StepState
+                if all(s.status == StepState.COMPLETED for s in wf_current.steps.values()):
+                    # Workflow is complete!
+                    # 1. Update Task to COMPLETED
+                    self.task_manager.update_state(task_id, TaskState.COMPLETED)
+                    
+                    # 2. Retrieve summary output
+                    summary_text = "No summary output found."
+                    for step in wf_current.steps.values():
+                        if step.capability == "summarize_text":
+                            if step.output_data and "summary" in step.output_data:
+                                summary_text = step.output_data["summary"]
+                            break
+                    
+                    # 3. Memory Update
+                    self.memory_manager.create(
+                        scope="task",
+                        owner=task_id,
+                        content=f"Summary: {summary_text}",
+                        source="summarizer"
+                    )
+                    
+                    # 4. Response Returned to Interface
+                    req = self._pending_requests.pop(task_id, None)
+                    if req:
+                        final_res = Response(
+                            request_id=req.request_id,
+                            status="completed",
+                            message=summary_text,
+                            data={"summary": summary_text}
+                        )
+                        self.interface_manager.send(final_res)
+        except Exception as e:
+            self.logger.error("Error in automatic workflow progression: %s", e)
+

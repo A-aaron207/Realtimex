@@ -249,7 +249,9 @@ def initialize_service_registry() -> ServiceRegistry:
     Returns:
         A new, empty ServiceRegistry instance.
     """
-    return ServiceRegistry()
+    registry = ServiceRegistry()
+    ServiceRegistry._instance = registry
+    return registry
 
 
 def initialize_capability_registry() -> CapabilityRegistry:

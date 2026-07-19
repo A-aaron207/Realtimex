@@ -101,6 +101,9 @@ class ModelGateway:
         Execute standard model text generation.
         Checks cache before routing, and delegates to FailoverEngine.
         """
+        if not self.registry.list_providers():
+            await self.initialize()
+
         self.metrics.record_request()
 
         # Check Cache

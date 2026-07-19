@@ -47,6 +47,15 @@ class ServiceRegistry:
     shared across the Kernel and any concurrently loading modules.
     """
 
+    _instance: ServiceRegistry | None = None
+
+    @classmethod
+    def get_instance(cls) -> ServiceRegistry:
+        """Get the global ServiceRegistry instance."""
+        if cls._instance is None:
+            raise RuntimeError("ServiceRegistry has not been initialized.")
+        return cls._instance
+
     def __init__(self) -> None:
         """Initialize an empty, thread-safe service registry."""
         self._services: dict[str, BaseService] = {}

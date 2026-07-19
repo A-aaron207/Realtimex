@@ -40,8 +40,33 @@ class RuleBasedWorkflowPlanner(WorkflowPlanner):
         if any(kw in goal_lower for kw in ["web", "portfolio", "app", "site", "code", "build"]):
             return self._build_software_workflow(workflow_id)
 
+        # Check if the goal looks like summarization
+        if "summarize" in goal_lower or "summarization" in goal_lower:
+            return self._build_summarization_workflow(workflow_id, goal)
+
         # Default fallback general workflow
         return self._build_default_workflow(workflow_id)
+
+    def _build_summarization_workflow(self, workflow_id: str, goal: str) -> list[WorkflowStep]:
+        """Generate a single-step summarization workflow."""
+        text = goal
+        # Strip common prefixes to get the raw text to summarize
+        for prefix in ["summarize this text:", "summarize text:", "summarize:"]:
+            if goal.lower().startswith(prefix):
+                text = goal[len(prefix):].strip()
+                break
+
+        return [
+            WorkflowStep(
+                step_id="summarize",
+                workflow_id=workflow_id,
+                capability="summarize_text",
+                input_data={"text": text},
+                status=StepState.PENDING,
+                estimated_time=2.0,
+                estimated_cost=0.05,
+            )
+        ]
 
     def _build_software_workflow(self, workflow_id: str) -> list[WorkflowStep]:
         """Generate a realistic 6-step software/web development workflow."""
