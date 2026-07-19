@@ -54,7 +54,10 @@ class RetryManager:
         """
         with self._lock:
             attempt = self._attempts.get(step.step_id, 0)
-            return attempt < self.max_retries
+            max_retries = step.input_data.get("max_retries")
+            if max_retries is None:
+                max_retries = step.metadata.get("max_retries", self.max_retries)
+            return attempt < max_retries
 
     def get_attempts(self, step_id: str) -> int:
         """Get current retry attempt count for a step."""
@@ -93,10 +96,14 @@ class RetryManager:
         else:
             delay = self.base_delay
 
+        max_retries = step.input_data.get("max_retries")
+        if max_retries is None:
+            max_retries = step.metadata.get("max_retries", self.max_retries)
+
         self._logger.info(
             "Scheduling retry attempt %d/%d for step %s in %.2fs",
             attempt,
-            self.max_retries,
+            max_retries,
             step.step_id,
             delay,
         )
@@ -110,7 +117,7 @@ class RetryManager:
                 payload={
                     "step_id": step.step_id,
                     "attempt": attempt,
-                    "max_retries": self.max_retries,
+                    "max_retries": max_retries,
                     "delay_seconds": delay,
                 },
             )

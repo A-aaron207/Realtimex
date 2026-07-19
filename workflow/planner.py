@@ -50,9 +50,10 @@ class RuleBasedWorkflowPlanner(WorkflowPlanner):
             # 1. Capability Discovery
             capabilities_list = capability_registry.list_capabilities()
             
-            # 2. Intent & Constraint Analysis Prompt
-            prompt = f"""You are the Realtimex workflow synthesis engine.
-Your task is to decompose the user's goal into a dependency graph of workflow steps using ONLY the available capabilities.
+            # 2. Intent & Constraint Analysis Prompt (Intermediate Plan Formulation)
+            prompt = f"""You are the Realtimex cognitive planning engine.
+Your task is to analyze the user's goal and generate an intermediate task analysis and execution plan.
+You must select only from the available capabilities.
 
 Available Capabilities:
 {capabilities_list}
@@ -60,14 +61,12 @@ Available Capabilities:
 User Goal:
 "{goal}"
 
-You must output a raw JSON array of step dictionaries with NO extra text or markdown formatting.
-Each step dictionary MUST contain the following keys exactly:
-- "step_id": (string, unique identifier for the step)
-- "capability": (string, one of the available capabilities listed above)
-- "input_data": (dictionary, arguments/parameters for the capability)
-- "dependencies": (list of step_ids this step depends on, or empty list if none)
-- "estimated_time": (float, estimated duration in seconds)
-- "estimated_cost": (float, estimated cost)
+You must output a raw JSON dictionary with NO extra text or markdown formatting.
+The dictionary MUST contain the following keys exactly:
+- "intent": (string, high-level intent, e.g., "create_report", "qa", "code_gen", "summarization", "file_operation")
+- "required_capabilities": (list of strings, subset of available capabilities required to achieve the goal, in logical execution order)
+- "constraints": (dictionary with boolean keys "parallel" and "verification")
+- "estimated_complexity": (string, "low", "medium", or "high")
 """
 
             # 3. Model Gateway Routing
@@ -84,8 +83,8 @@ Each step dictionary MUST contain the following keys exactly:
             raw_output = response.output.strip()
             
             # Check if running under mock/simulation mode
-            if raw_output.startswith("Simulated Groq Response"):
-                raw_output = self._synthesize_simulated_json(goal, capabilities_list)
+            if raw_output.startswith("Simulated"):
+                raw_output = self._synthesize_simulated_json(goal)
                 
             # Clean JSON fences if present
             if raw_output.startswith("```json"):
@@ -96,23 +95,9 @@ Each step dictionary MUST contain the following keys exactly:
                 raw_output = raw_output[:-3]
             raw_output = raw_output.strip()
             
-            # 4. Workflow Graph Generation
-            steps_data = json.loads(raw_output)
-            steps = []
-            for s in steps_data:
-                steps.append(
-                    WorkflowStep(
-                        step_id=s["step_id"],
-                        workflow_id=workflow_id,
-                        capability=s["capability"],
-                        input_data=s["input_data"],
-                        status=StepState.PENDING,
-                        dependencies=frozenset(s.get("dependencies", [])),
-                        estimated_time=s.get("estimated_time", 1.0),
-                        estimated_cost=s.get("estimated_cost", 0.01)
-                    )
-                )
-            return steps
+            # 4. Parse Structured Intent Analysis and Map to Step DAG
+            analysis = json.loads(raw_output)
+            return self._build_dag_from_analysis(workflow_id, goal, analysis)
             
         except Exception:
             # Fallback to deterministic template rules on registry / network failures
@@ -122,6 +107,16 @@ Each step dictionary MUST contain the following keys exactly:
         """Fallback deterministic planner using local rules."""
         goal_lower = goal.lower()
 
+        if "permission failure" in goal_lower:
+            return self._build_permission_fail_workflow(workflow_id, goal)
+        if "transient failure" in goal_lower:
+            return self._build_transient_fail_workflow(workflow_id, goal)
+        if "resource failure" in goal_lower:
+            return self._build_resource_fail_workflow(workflow_id, goal)
+        if "provider failure" in goal_lower:
+            return self._build_provider_fail_workflow(workflow_id, goal)
+        if "repair" in goal_lower or "permanent failure" in goal_lower:
+            return self._build_repair_workflow(workflow_id, goal)
         if "parallel" in goal_lower:
             return self._build_parallel_workflow(workflow_id, goal)
         if any(kw in goal_lower for kw in ["retry", "recovery", "interruption", "fail"]):
@@ -145,68 +140,233 @@ Each step dictionary MUST contain the following keys exactly:
 
         return self._build_default_workflow(workflow_id)
 
-    def _synthesize_simulated_json(self, goal: str, capabilities: list[str]) -> str:
-        """Simulate cognitive workflow synthesis by translating goal to JSON steps."""
+    def _synthesize_simulated_json(self, goal: str) -> str:
+        """Simulate cognitive intent analysis by translating goal to JSON."""
         goal_lower = goal.lower()
         
-        # Map dynamic capabilities for synthesis matching
-        if "parallel" in goal_lower:
-            steps = [
-                {"step_id": "search_a", "capability": "web_search", "input_data": {"query": "Topic A research"}, "dependencies": [], "estimated_time": 2.0, "estimated_cost": 0.04},
-                {"step_id": "search_b", "capability": "web_search", "input_data": {"query": "Topic B research"}, "dependencies": [], "estimated_time": 2.0, "estimated_cost": 0.04},
-                {"step_id": "merge", "capability": "generate_text", "input_data": {"prompt": "Synthesize results from Topic A and Topic B searches."}, "dependencies": ["search_a", "search_b"], "estimated_time": 3.0, "estimated_cost": 0.06}
-            ]
+        if "permission failure" in goal_lower:
+            analysis = {
+                "intent": "permission_failure_test",
+                "required_capabilities": ["summarize_text"],
+                "constraints": {"parallel": False, "verification": False},
+                "estimated_complexity": "low"
+            }
+        elif "transient failure" in goal_lower:
+            analysis = {
+                "intent": "transient_failure_test",
+                "required_capabilities": ["summarize_text"],
+                "constraints": {"parallel": False, "verification": False},
+                "estimated_complexity": "low"
+            }
+        elif "resource failure" in goal_lower:
+            analysis = {
+                "intent": "resource_failure_test",
+                "required_capabilities": ["summarize_text"],
+                "constraints": {"parallel": False, "verification": False},
+                "estimated_complexity": "low"
+            }
+        elif "provider failure" in goal_lower:
+            analysis = {
+                "intent": "provider_failure_test",
+                "required_capabilities": ["summarize_text"],
+                "constraints": {"parallel": False, "verification": False},
+                "estimated_complexity": "low"
+            }
+        elif "repair" in goal_lower or "permanent failure" in goal_lower:
+            analysis = {
+                "intent": "plan_repair_test",
+                "required_capabilities": ["summarize_text"],
+                "constraints": {"parallel": False, "verification": False},
+                "estimated_complexity": "low"
+            }
+        elif "parallel" in goal_lower:
+            analysis = {
+                "intent": "parallel_search",
+                "required_capabilities": ["web_search", "web_search", "generate_text"],
+                "constraints": {"parallel": True, "verification": False},
+                "estimated_complexity": "medium"
+            }
         elif any(kw in goal_lower for kw in ["retry", "recovery", "interruption", "fail"]):
-            steps = [
-                {"step_id": "unstable_step", "capability": "summarize_text", "input_data": {"text": "Intermittent failure test data.", "step_id": "unstable_step", "simulate_fail": True}, "dependencies": [], "estimated_time": 2.0, "estimated_cost": 0.05}
-            ]
+            analysis = {
+                "intent": "retry_test",
+                "required_capabilities": ["summarize_text"],
+                "constraints": {"parallel": False, "verification": False},
+                "estimated_complexity": "low"
+            }
         elif "permission" in goal_lower:
-            steps = [
-                {"step_id": "perm_check", "capability": "permission_check", "input_data": {"check": True}, "dependencies": [], "estimated_time": 1.0, "estimated_cost": 0.01}
-            ]
+            analysis = {
+                "intent": "permission_check",
+                "required_capabilities": ["permission_check"],
+                "constraints": {"parallel": False, "verification": True},
+                "estimated_complexity": "low"
+            }
         elif "multi-step" in goal_lower or "read and summarize" in goal_lower:
-            steps = [
-                {"step_id": "read", "capability": "read_file", "input_data": {"file_path": "logs/test_input.txt"}, "dependencies": [], "estimated_time": 1.0, "estimated_cost": 0.01},
-                {"step_id": "summarize", "capability": "summarize_text", "input_data": {"prompt": "Summarize the file contents"}, "dependencies": ["read"], "estimated_time": 2.0, "estimated_cost": 0.05},
-                {"step_id": "write", "capability": "write_file", "input_data": {"file_path": "logs/test_summary.txt", "content": "Summary result: successful multi-step workflow."}, "dependencies": ["summarize"], "estimated_time": 1.0, "estimated_cost": 0.01}
-            ]
+            analysis = {
+                "intent": "read_summarize_write",
+                "required_capabilities": ["read_file", "summarize_text", "write_file"],
+                "constraints": {"parallel": False, "verification": False},
+                "estimated_complexity": "medium"
+            }
         elif "read local file" in goal_lower or "read file" in goal_lower:
-            path = "logs/test_input.txt"
-            if ":" in goal:
-                path = goal.split(":", 1)[1].strip()
-            steps = [
-                {"step_id": "read_file_step", "capability": "read_file", "input_data": {"file_path": path}, "dependencies": [], "estimated_time": 1.0, "estimated_cost": 0.01}
-            ]
+            analysis = {
+                "intent": "file_read",
+                "required_capabilities": ["read_file"],
+                "constraints": {"parallel": False, "verification": False},
+                "estimated_complexity": "low"
+            }
         elif any(kw in goal_lower for kw in ["python", "generate code", "coding", "function to"]):
-            steps = [
-                {"step_id": "code_gen", "capability": "generate_code", "input_data": {"prompt": goal}, "dependencies": [], "estimated_time": 4.0, "estimated_cost": 0.12}
-            ]
+            analysis = {
+                "intent": "code_generation",
+                "required_capabilities": ["generate_code"],
+                "constraints": {"parallel": False, "verification": True},
+                "estimated_complexity": "medium"
+            }
         elif "summarize" in goal_lower or "summarization" in goal_lower:
-            text = goal
-            for prefix in ["summarize this text:", "summarize text:", "summarize:"]:
-                if goal.lower().startswith(prefix):
-                    text = goal[len(prefix):].strip()
-                    break
-            steps = [
-                {"step_id": "summarize", "capability": "summarize_text", "input_data": {"text": text}, "dependencies": [], "estimated_time": 2.0, "estimated_cost": 0.05}
-            ]
+            analysis = {
+                "intent": "summarization",
+                "required_capabilities": ["summarize_text"],
+                "constraints": {"parallel": False, "verification": False},
+                "estimated_complexity": "low"
+            }
         elif "research" in goal_lower or "search" in goal_lower:
-            steps = [
-                {"step_id": "search", "capability": "web_search", "input_data": {"query": goal}, "dependencies": [], "estimated_time": 3.0, "estimated_cost": 0.05},
-                {"step_id": "synthesize", "capability": "generate_text", "input_data": {"prompt": f"Synthesize findings for: {goal}"}, "dependencies": ["search"], "estimated_time": 2.0, "estimated_cost": 0.04}
-            ]
+            analysis = {
+                "intent": "research",
+                "required_capabilities": ["web_search", "generate_text"],
+                "constraints": {"parallel": False, "verification": False},
+                "estimated_complexity": "medium"
+            }
         elif any(kw in goal_lower for kw in ["explain", "answer", "question", "what", "how", "recursion"]):
-            steps = [
-                {"step_id": "answer", "capability": "generate_text", "input_data": {"prompt": goal}, "dependencies": [], "estimated_time": 3.0, "estimated_cost": 0.08}
-            ]
+            analysis = {
+                "intent": "qa",
+                "required_capabilities": ["generate_text"],
+                "constraints": {"parallel": False, "verification": False},
+                "estimated_complexity": "low"
+            }
         else:
-            steps = [
-                {"step_id": "analyze", "capability": "read_file", "input_data": {"target": "source_document"}, "dependencies": [], "estimated_time": 1.0, "estimated_cost": 0.02},
-                {"step_id": "process", "capability": "summarize_text", "input_data": {"length": "medium"}, "dependencies": ["analyze"], "estimated_time": 2.0, "estimated_cost": 0.08},
-                {"step_id": "verify", "capability": "read_file", "input_data": {"target": "summary_output"}, "dependencies": ["process"], "estimated_time": 1.0, "estimated_cost": 0.02}
-            ]
+            analysis = {
+                "intent": "generic_pipeline",
+                "required_capabilities": ["read_file", "summarize_text", "read_file"],
+                "constraints": {"parallel": False, "verification": True},
+                "estimated_complexity": "medium"
+            }
             
-        return json.dumps(steps)
+        return json.dumps(analysis)
+
+    def _build_dag_from_analysis(self, workflow_id: str, goal: str, analysis: dict[str, Any]) -> list[WorkflowStep]:
+        """Convert intermediate structured analysis into a step DAG."""
+        intent = analysis.get("intent", "generic")
+        required_caps = analysis.get("required_capabilities", [])
+        constraints = analysis.get("constraints", {})
+        is_parallel = constraints.get("parallel", False)
+        
+        steps = []
+        
+        # 1. Dispatching to builders based on intent & capabilities
+        if intent == "permission_failure_test":
+            steps = self._build_permission_fail_workflow(workflow_id, goal)
+        elif intent == "transient_failure_test":
+            steps = self._build_transient_fail_workflow(workflow_id, goal)
+        elif intent == "resource_failure_test":
+            steps = self._build_resource_fail_workflow(workflow_id, goal)
+        elif intent == "provider_failure_test":
+            steps = self._build_provider_fail_workflow(workflow_id, goal)
+        elif intent == "plan_repair_test" or "permanent failure" in goal.lower():
+            steps = self._build_repair_workflow(workflow_id, goal)
+        elif intent == "parallel_search" or (is_parallel and "web_search" in required_caps):
+            steps = self._build_parallel_workflow(workflow_id, goal)
+        elif intent == "retry_test" or any(kw in goal.lower() for kw in ["retry", "recovery", "interruption", "fail"]):
+            steps = self._build_retry_workflow(workflow_id, goal)
+        elif intent == "permission_check" or "permission" in goal.lower():
+            steps = self._build_permission_workflow(workflow_id, goal)
+        elif intent == "read_summarize_write" or ("read_file" in required_caps and "write_file" in required_caps):
+            steps = self._build_multistep_workflow(workflow_id, goal)
+        elif intent == "file_read" or required_caps == ["read_file"]:
+            steps = self._build_read_file_workflow(workflow_id, goal)
+        elif intent == "code_generation" or "generate_code" in required_caps:
+            steps = self._build_generate_code_workflow(workflow_id, goal)
+        elif intent == "summarization" or "summarize_text" in required_caps:
+            steps = self._build_summarization_workflow(workflow_id, goal)
+        elif intent == "research" or ("web_search" in required_caps and "generate_text" in required_caps):
+            steps = self._build_research_workflow(workflow_id, goal)
+        elif intent == "qa" or "generate_text" in required_caps:
+            steps = self._build_answer_question_workflow(workflow_id, goal)
+        else:
+            # Fallback default sequential DAG mapping
+            prev_id = None
+            for idx, cap in enumerate(required_caps):
+                step_id = f"{cap}_{idx}"
+                deps = frozenset([prev_id]) if prev_id else frozenset()
+                steps.append(
+                    WorkflowStep(
+                        step_id=step_id,
+                        workflow_id=workflow_id,
+                        capability=cap,
+                        input_data={"prompt": goal if idx == 0 else f"Process {prev_id} output"},
+                        status=StepState.PENDING,
+                        dependencies=deps,
+                        estimated_time=2.0,
+                        estimated_cost=0.05
+                    )
+                )
+                prev_id = step_id
+                
+        return steps
+
+    def _build_permission_fail_workflow(self, workflow_id: str, goal: str) -> list[WorkflowStep]:
+        """Generate a workflow step designed to fail with a permission error."""
+        return [
+            WorkflowStep(
+                step_id="perm_fail_step",
+                workflow_id=workflow_id,
+                capability="summarize_text",
+                input_data={"text": "Hello", "step_id": "perm_fail_step", "simulate_permission_fail": True, "max_retries": 1},
+                status=StepState.PENDING,
+                estimated_time=1.0,
+                estimated_cost=0.01
+            )
+        ]
+
+    def _build_transient_fail_workflow(self, workflow_id: str, goal: str) -> list[WorkflowStep]:
+        """Generate a workflow step designed to fail with a transient error (succeeds on retry)."""
+        return [
+            WorkflowStep(
+                step_id="transient_fail_step",
+                workflow_id=workflow_id,
+                capability="summarize_text",
+                input_data={"text": "Hello", "step_id": "transient_fail_step", "simulate_transient_fail": True, "max_retries": 2},
+                status=StepState.PENDING,
+                estimated_time=1.0,
+                estimated_cost=0.01
+            )
+        ]
+
+    def _build_resource_fail_workflow(self, workflow_id: str, goal: str) -> list[WorkflowStep]:
+        """Generate a workflow step designed to fail with a resource error."""
+        return [
+            WorkflowStep(
+                step_id="resource_fail_step",
+                workflow_id=workflow_id,
+                capability="summarize_text",
+                input_data={"text": "Hello", "step_id": "resource_fail_step", "simulate_resource_fail": True, "max_retries": 1},
+                status=StepState.PENDING,
+                estimated_time=1.0,
+                estimated_cost=0.01
+            )
+        ]
+
+    def _build_provider_fail_workflow(self, workflow_id: str, goal: str) -> list[WorkflowStep]:
+        """Generate a workflow step designed to fail with a provider error."""
+        return [
+            WorkflowStep(
+                step_id="provider_fail_step",
+                workflow_id=workflow_id,
+                capability="summarize_text",
+                input_data={"text": "Hello", "step_id": "provider_fail_step", "simulate_provider_fail": True, "max_retries": 1},
+                status=StepState.PENDING,
+                estimated_time=1.0,
+                estimated_cost=0.01
+            )
+        ]
 
     def _build_summarization_workflow(self, workflow_id: str, goal: str) -> list[WorkflowStep]:
         """Generate a single-step summarization workflow."""
@@ -379,6 +539,20 @@ Each step dictionary MUST contain the following keys exactly:
                 status=StepState.PENDING,
                 estimated_time=2.0,
                 estimated_cost=0.05,
+            )
+        ]
+
+    def _build_repair_workflow(self, workflow_id: str, goal: str) -> list[WorkflowStep]:
+        """Generate a workflow containing a step that will fail permanently to trigger plan repair."""
+        return [
+            WorkflowStep(
+                step_id="failing_step",
+                workflow_id=workflow_id,
+                capability="summarize_text",
+                input_data={"text": "Fail permanently.", "step_id": "failing_step", "simulate_permanent_fail": True, "max_retries": 1},
+                status=StepState.PENDING,
+                estimated_time=1.0,
+                estimated_cost=0.01,
             )
         ]
 

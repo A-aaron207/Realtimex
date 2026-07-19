@@ -161,12 +161,35 @@ class Module(ModuleEntryPoint):
 
     def execute(self, capability: str, context: Any) -> dict[str, Any]:
         """Standardized execution entry point mapping capabilities to methods."""
+        input_data = context.input
+        attempt = context.metadata.get("attempt", 0)
+        
+        simulate_fail = input_data.get("simulate_fail", False)
+        simulate_permanent_fail = input_data.get("simulate_permanent_fail", False)
+        simulate_permission_fail = input_data.get("simulate_permission_fail", False)
+        simulate_resource_fail = input_data.get("simulate_resource_fail", False)
+        simulate_provider_fail = input_data.get("simulate_provider_fail", False)
+        simulate_transient_fail = input_data.get("simulate_transient_fail", False)
+        
+        if simulate_permanent_fail:
+            raise RuntimeError("Simulated permanent failure for plan repair testing.")
+        if simulate_permission_fail:
+            raise RuntimeError("Simulated permission error: Access Denied.")
+        if simulate_resource_fail:
+            raise RuntimeError("Simulated resource error: Rate Limit Exceeded.")
+        if simulate_provider_fail:
+            raise RuntimeError("Simulated provider error: Groq is offline.")
+        if simulate_transient_fail and attempt < 1:
+            raise RuntimeError("Simulated transient error: connection timeout.")
+        if simulate_fail and attempt < 1:
+            raise RuntimeError("Simulated intermittent failure for retry/recovery testing.")
+
         if capability == "summarize_text":
-            return self.summarize_text(context.input)
+            return self.summarize_text(input_data)
         elif capability == "generate_text":
-            return self.generate_text(context.input)
+            return self.generate_text(input_data)
         elif capability == "generate_code":
-            return self.generate_code(context.input)
+            return self.generate_code(input_data)
         elif capability == "permission_check":
             return self.permission_check(context)
         else:

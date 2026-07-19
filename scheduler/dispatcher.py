@@ -153,6 +153,7 @@ class Dispatcher:
             if loaded_mod and hasattr(loaded_mod, "manifest"):
                 permissions = loaded_mod.manifest.permissions
 
+        attempt = self._retry_manager.get_attempts(step.step_id)
         context = ExecutionContext(
             task_id=workflow.parent_task_id,
             workflow_id=step.workflow_id,
@@ -161,6 +162,7 @@ class Dispatcher:
             input=step.input_data,
             configuration={"provider_id": provider_id},
             permissions=permissions,
+            metadata={"attempt": attempt},
         )
 
         try:

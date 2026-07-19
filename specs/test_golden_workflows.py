@@ -131,3 +131,8 @@ def test_recovery_retry(booted_api):
 def test_permission_request(booted_api):
     output = execute_workflow(booted_api, "Test a permission request check step")
     assert "permissions" in output.lower()
+
+
+def test_autonomous_plan_repair(booted_api):
+    output = execute_workflow(booted_api, "Test autonomous plan repair after permanent failure", timeout=15.0)
+    assert "recovery" in output.lower() or "recovery successful" in output.lower()
