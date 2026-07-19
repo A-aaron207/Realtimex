@@ -379,6 +379,8 @@ def run_boot_sequence(paths: BootPaths) -> BootResult:
     event_bus.emit(Event(name=KernelEventType.EVENT_BUS_INITIALIZED, source="kernel.boot"))
 
     service_registry = initialize_service_registry()
+    from services.base import SimpleService
+    service_registry.register(SimpleService("logger", {"logger": logger}))
     event_bus.emit(Event(name=KernelEventType.SERVICE_REGISTRY_INITIALIZED, source="kernel.boot"))
 
     capability_registry = initialize_capability_registry()
@@ -509,6 +511,7 @@ def run_boot_sequence(paths: BootPaths) -> BootResult:
     
     # 7. Model Gateway
     model_gateway = ModelGateway(event_bus=event_bus)
+    service_registry.register(SimpleService("model_gateway", {"gateway": model_gateway}))
     
     # 8. Cognitive Engine
     cognitive_engine = CognitiveEngine(
