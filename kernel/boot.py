@@ -514,6 +514,7 @@ def run_boot_sequence(paths: BootPaths) -> BootResult:
     # 7. Model Gateway
     model_gateway = ModelGateway(event_bus=event_bus)
     service_registry.register(SimpleService("model_gateway", {"gateway": model_gateway}))
+    service_registry.register(SimpleService("capability_registry", {"registry": capability_registry}))
     
     # 8. Cognitive Engine
     cognitive_engine = CognitiveEngine(
