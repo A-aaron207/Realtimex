@@ -7,7 +7,8 @@
     "web_search"
   ],
   "services": [
-    "logger"
+    "logger",
+    "model_gateway"
   ],
   "worker_type": "replicable",
   "permissions": {

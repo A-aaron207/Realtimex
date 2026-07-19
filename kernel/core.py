@@ -461,48 +461,45 @@ class Kernel:
         """
         Handle incoming requests from interfaces.
         """
-        action = request.user_input.get("action", "").lower()
-        if action == "summarize":
-            args = request.user_input.get("args", [])
-            if len(args) >= 2 and args[0] == "this" and args[1] == "text:":
-                text_to_summarize = " ".join(args[2:])
-            else:
-                text_to_summarize = " ".join(args)
-            
-            # 1. Task Created
-            task = self.task_manager.create_task(
-                goal=f"Summarize text: {text_to_summarize}",
-                priority=TaskPriority.NORMAL
-            )
-            
-            # Map task ID to Request
-            self._pending_requests[task.task_id] = request
-            
-            # Progress Task lifecycle
-            self.task_manager.update_state(task.task_id, TaskState.PLANNING)
-            self.task_manager.update_state(task.task_id, TaskState.QUEUED)
-            self.task_manager.update_state(task.task_id, TaskState.RUNNING)
-            
-            # 2. Workflow Generated
-            wf = self.workflow_manager.create_workflow(task.task_id, task.goal)
-            
-            # 3. Schedule initial steps
-            ready_steps = self.workflow_manager.ready_steps(wf.workflow_id)
-            for step in ready_steps:
-                self.scheduler_api.schedule(step)
-                
-            return Response(
-                request_id=request.request_id,
-                status="running",
-                message=f"Summarization task {task.task_id} is running.",
-                metadata={"task_id": task.task_id}
-            )
-        else:
+        action = request.user_input.get("action")
+        if not action:
             return Response(
                 request_id=request.request_id,
                 status="error",
-                message=f"Unknown action: {action}"
+                message="No action provided."
             )
+            
+        args = request.user_input.get("args", [])
+        goal = request.user_input.get("raw") or (str(action) + " " + " ".join(map(str, args))).strip()
+
+        # 1. Task Created
+        task = self.task_manager.create_task(
+            goal=goal,
+            priority=TaskPriority.NORMAL
+        )
+        
+        # Map task ID to Request
+        self._pending_requests[task.task_id] = request
+        
+        # Progress Task lifecycle
+        self.task_manager.update_state(task.task_id, TaskState.PLANNING)
+        self.task_manager.update_state(task.task_id, TaskState.QUEUED)
+        self.task_manager.update_state(task.task_id, TaskState.RUNNING)
+        
+        # 2. Workflow Generated
+        wf = self.workflow_manager.create_workflow(task.task_id, task.goal)
+        
+        # 3. Schedule initial steps
+        ready_steps = self.workflow_manager.ready_steps(wf.workflow_id)
+        for step in ready_steps:
+            self.scheduler_api.schedule(step)
+            
+        return Response(
+            request_id=request.request_id,
+            status="running",
+            message=f"Task {task.task_id} is running.",
+            metadata={"task_id": task.task_id}
+        )
 
     def _on_step_completed(self, event: Event) -> None:
         """
@@ -532,20 +529,26 @@ class Kernel:
                     # 1. Update Task to COMPLETED
                     self.task_manager.update_state(task_id, TaskState.COMPLETED)
                     
-                    # 2. Retrieve summary output
-                    summary_text = "No summary output found."
-                    for step in wf_current.steps.values():
-                        if step.capability == "summarize_text":
-                            if step.output_data and "summary" in step.output_data:
-                                summary_text = step.output_data["summary"]
-                            break
+                    # 2. Retrieve outputs from all steps
+                    output_parts = []
+                    for s_id, step in wf_current.steps.items():
+                        if step.output_data:
+                            val = step.output_data.get("summary") or step.output_data.get("output") or step.output_data.get("file_contents") or step.output_data.get("results") or step.output_data.get("code")
+                            if not val and "bytes_written" in step.output_data:
+                                val = f"Wrote {step.output_data['bytes_written']} bytes to {step.output_data.get('file_path')}."
+                            if not val and step.output_data.get("status") == "SUCCESS":
+                                val = "SUCCESS"
+                            if val:
+                                output_parts.append(f"[{s_id}] {val}")
+                    
+                    summary_text = "\n".join(output_parts) if output_parts else "No output found."
                     
                     # 3. Memory Update
                     self.memory_manager.create(
                         scope="task",
                         owner=task_id,
-                        content=f"Summary: {summary_text}",
-                        source="summarizer"
+                        content=f"Workflow result: {summary_text}",
+                        source="kernel"
                     )
                     
                     # 4. Response Returned to Interface
@@ -555,7 +558,7 @@ class Kernel:
                             request_id=req.request_id,
                             status="completed",
                             message=summary_text,
-                            data={"summary": summary_text}
+                            data={"output": summary_text}
                         )
                         self.interface_manager.send(final_res)
         except Exception as e:

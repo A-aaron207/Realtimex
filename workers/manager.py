@@ -70,6 +70,9 @@ class WorkerManager:
             "write_file",
             "read_file",
             "summarize_text",
+            "generate_text",
+            "generate_code",
+            "permission_check",
         ]
 
         for cap in capabilities:
