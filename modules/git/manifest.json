@@ -1,0 +1,22 @@
+{
+  "module_id": "git",
+  "name": "Git Module",
+  "version": "1.0.0",
+  "author": "Aaron",
+  "capabilities": [
+    "clone_repo",
+    "commit",
+    "branch",
+    "diff"
+  ],
+  "services": [
+    "logger"
+  ],
+  "worker_type": "replicable",
+  "permissions": {
+    "filesystem": "read_write",
+    "network": true,
+    "terminal": true,
+    "memory": "task_only"
+  }
+}
