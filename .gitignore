@@ -1,0 +1,21 @@
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Logs and databases
+logs/
+*.log
+*.jsonl
+*.db
+*.sqlite
+
+# Pytest
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local/temp folders
+temp/
+tmp/
+scratch/
+.gemini/
