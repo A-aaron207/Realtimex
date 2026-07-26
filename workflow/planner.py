@@ -55,6 +55,20 @@ class RuleBasedWorkflowPlanner(WorkflowPlanner):
             return self._build_retry_workflow(workflow_id, goal)
         if "permission" in goal_lower:
             return self._build_permission_workflow(workflow_id, goal)
+
+        # Prefer native tool execution over LLM reasoning
+        native_steps = self._build_native_tool_workflow(workflow_id, goal)
+        if native_steps is not None:
+            return native_steps
+            
+        # Check for compound code and save requests
+        is_code_request = any(kw in goal_lower for kw in ["write", "code", "create", "make", "generate", "build", "refactor"]) and any(kw in goal_lower for kw in ["python", "html", "css", "calculator", "function", "program", "script"])
+        is_save_request = "save" in goal_lower or "write file" in goal_lower or "write to file" in goal_lower
+        if is_code_request and is_save_request:
+            return self._build_code_and_save_workflow(workflow_id, goal)
+            
+        if "save" in goal_lower or "write file" in goal_lower or "write to file" in goal_lower:
+            return self._build_write_file_workflow(workflow_id, goal)
         if "multi-step" in goal_lower or "read and summarize" in goal_lower:
             return self._build_multistep_workflow(workflow_id, goal)
         if "read local file" in goal_lower or "read file" in goal_lower:
@@ -84,6 +98,7 @@ class RuleBasedWorkflowPlanner(WorkflowPlanner):
             
             # 2. Intent & Constraint Analysis Prompt (Intermediate Plan Formulation)
             import os
+            history_str = self._get_session_history(workflow_id)
             prompt = f"""You are the Realtimex cognitive planning engine.
 Your task is to analyze the user's goal and generate an execution plan with steps.
 You must select only from the available capabilities.
@@ -111,7 +126,7 @@ Planning Guidelines:
    - Step 2: write_file to save the generated content to the target file path.
 2. To feed the output of one step into a subsequent step, use the cross-step reference string format: "Process <step_id> output" as the value of the parameter.
    Example: If step_id is "generate_code_0", write_file's input should look like: {{"path": "/home/user/Desktop/index.html", "content": "Process generate_code_0 output"}}.
-
+{history_str}
 User Goal:
 "{goal}"
 
@@ -185,6 +200,8 @@ The dictionary MUST contain the following keys exactly:
             return self._build_retry_workflow(workflow_id, goal)
         if "permission" in goal_lower:
             return self._build_permission_workflow(workflow_id, goal)
+        if "save" in goal_lower or "write file" in goal_lower or "write to file" in goal_lower:
+            return self._build_write_file_workflow(workflow_id, goal)
         if "multi-step" in goal_lower or "read and summarize" in goal_lower:
             return self._build_multistep_workflow(workflow_id, goal)
         if "read local file" in goal_lower or "read file" in goal_lower:
@@ -201,6 +218,52 @@ The dictionary MUST contain the following keys exactly:
             return self._build_software_workflow(workflow_id)
 
         return self._build_default_workflow(workflow_id)
+
+    def _get_session_history(self, workflow_id: str) -> str:
+        """Retrieve previous tasks and outputs in the same session to build conversation history."""
+        try:
+            from services.registry import ServiceRegistry
+            registry = ServiceRegistry.get_instance()
+            wf_mgr = registry.get("workflow_manager").metadata["manager"]
+            task_mgr = registry.get("task_manager").metadata["manager"]
+            
+            wf = wf_mgr.load_workflow(workflow_id)
+            current_task = task_mgr.get_task(wf.parent_task_id)
+            session_id = current_task.metadata.get("session_id")
+            
+            if not session_id:
+                return ""
+                
+            all_tasks = task_mgr._repository.find_by(
+                lambda t: t.metadata.get("session_id") == session_id
+            )
+            all_tasks = sorted(all_tasks, key=lambda t: t.created_at)
+            
+            history_lines = []
+            for t in all_tasks:
+                if t.task_id == current_task.task_id:
+                    continue
+                history_lines.append(f"User: {t.goal}")
+                
+                try:
+                    mem_mgr = registry.get("memory_manager").metadata["manager"]
+                    if mem_mgr:
+                        memories = mem_mgr.search(query={"owner": t.task_id, "scope": "task"})
+                        if memories:
+                            content = memories[0].content
+                            if content.startswith("Workflow result:"):
+                                content = content[len("Workflow result:"):].strip()
+                            if content.startswith("[") and "]" in content:
+                                content = content.split("]", 1)[1].strip()
+                            history_lines.append(f"System Output: {content}")
+                except Exception:
+                    pass
+            
+            if history_lines:
+                return "\nSession Conversation History:\n" + "\n".join(history_lines) + "\n"
+        except Exception:
+            pass
+        return ""
 
     def _synthesize_simulated_json(self, goal: str) -> str:
         """Simulate cognitive intent analysis by translating goal to JSON."""
@@ -260,6 +323,13 @@ The dictionary MUST contain the following keys exactly:
                 "intent": "permission_check",
                 "required_capabilities": ["permission_check"],
                 "constraints": {"parallel": False, "verification": True},
+                "estimated_complexity": "low"
+            }
+        elif "save" in goal_lower or "write file" in goal_lower or "write to file" in goal_lower:
+            analysis = {
+                "intent": "file_operation",
+                "required_capabilities": ["write_file"],
+                "constraints": {"parallel": False, "verification": False},
                 "estimated_complexity": "low"
             }
         elif "multi-step" in goal_lower or "read and summarize" in goal_lower:
@@ -340,6 +410,10 @@ The dictionary MUST contain the following keys exactly:
             steps = self._build_retry_workflow(workflow_id, goal)
         elif intent == "permission_check" or "permission" in goal.lower():
             steps = self._build_permission_workflow(workflow_id, goal)
+        elif any(kw in goal.lower() for kw in ["write", "code", "create", "make", "generate", "build", "refactor"]) and any(kw in goal.lower() for kw in ["python", "html", "css", "calculator", "function", "program", "script"]) and any(kw in goal.lower() for kw in ["save", "write file", "write to file"]):
+            steps = self._build_code_and_save_workflow(workflow_id, goal)
+        elif "save" in goal.lower() or "write file" in goal.lower() or "write to file" in goal.lower():
+            steps = self._build_write_file_workflow(workflow_id, goal)
         elif is_simulated and (intent == "read_summarize_write" or ("read_file" in required_caps and "write_file" in required_caps)):
             steps = self._build_multistep_workflow(workflow_id, goal)
         elif is_simulated and (intent == "file_read" or required_caps == ["read_file"]):
@@ -741,3 +815,198 @@ The dictionary MUST contain the following keys exactly:
             ),
         ]
         return steps
+
+    def _resolve_target_file_path(self, workflow_id: str, goal: str) -> str:
+        """Resolve the target path and filename for a file operation, supporting session history and fallback."""
+        goal_lower = goal.lower()
+        import os
+        path = "saved_file.txt"
+        session_goals = []
+        try:
+            from services.registry import ServiceRegistry
+            registry = ServiceRegistry.get_instance()
+            wf_mgr = registry.get("workflow_manager").metadata["manager"]
+            task_mgr = registry.get("task_manager").metadata["manager"]
+            wf = wf_mgr.load_workflow(workflow_id)
+            current_task = task_mgr.get_task(wf.parent_task_id)
+            session_id = current_task.metadata.get("session_id")
+            if session_id:
+                all_tasks = task_mgr._repository.find_by(
+                    lambda t: t.metadata.get("session_id") == session_id
+                )
+                all_tasks = sorted(all_tasks, key=lambda t: t.created_at)
+                for t in all_tasks:
+                    session_goals.append(t.goal.lower())
+        except Exception:
+            pass
+            
+        combined_context_goals = " ".join(session_goals) + " " + goal.lower()
+        
+        if "desktop" in combined_context_goals:
+            desktop_dir = os.path.join(os.path.expanduser("~"), "Desktop")
+            import re
+            filename_match = re.search(r'([a-zA-Z0-9_\-]+\.py|[a-zA-Z0-9_\-]+\.[a-zA-Z0-9]+)', combined_context_goals)
+            if filename_match:
+                filename = filename_match.group(1)
+            else:
+                if "even" in combined_context_goals or "odd" in combined_context_goals:
+                    filename = "even_odd.py"
+                elif "fibonacci" in combined_context_goals:
+                    filename = "fibonacci.py"
+                elif "calculator" in combined_context_goals:
+                    filename = "calculator.py"
+                elif "login" in combined_context_goals:
+                    filename = "login.html"
+                else:
+                    filename = "script.py"
+            path = os.path.join(desktop_dir, filename)
+        else:
+            import re
+            filename_match = re.search(r'([a-zA-Z0-9_\-]+\.[a-zA-Z0-9]+)', combined_context_goals)
+            if filename_match:
+                path = filename_match.group(1)
+            else:
+                if "even" in combined_context_goals or "odd" in combined_context_goals:
+                    path = "even_odd.py"
+                elif "fibonacci" in combined_context_goals:
+                    path = "fibonacci.py"
+                elif "calculator" in combined_context_goals:
+                    path = "calculator.py"
+                elif "login" in combined_context_goals:
+                    path = "login.html"
+                else:
+                    path = "saved_file.txt"
+        return path
+
+    def _build_write_file_workflow(self, workflow_id: str, goal: str) -> list[WorkflowStep]:
+        """Generate a single-step write file workflow, resolving context path & contents."""
+        path = self._resolve_target_file_path(workflow_id, goal)
+        content_ref = "Process code_gen output"
+        from workflow.step import StepState
+        return [
+            WorkflowStep(
+                step_id="write",
+                workflow_id=workflow_id,
+                capability="write_file",
+                input_data={"path": path, "file_path": path, "content": content_ref},
+                status=StepState.PENDING,
+                estimated_time=1.0,
+                estimated_cost=0.02,
+            )
+        ]
+
+    def _build_code_and_save_workflow(self, workflow_id: str, goal: str) -> list[WorkflowStep]:
+        """Generate a 2-step code generation and saving workflow."""
+        path = self._resolve_target_file_path(workflow_id, goal)
+        from workflow.step import StepState
+        return [
+            WorkflowStep(
+                step_id="code_gen",
+                workflow_id=workflow_id,
+                capability="generate_code",
+                input_data={"prompt": goal},
+                status=StepState.PENDING,
+                estimated_time=4.0,
+                estimated_cost=0.12,
+            ),
+            WorkflowStep(
+                step_id="write",
+                workflow_id=workflow_id,
+                capability="write_file",
+                input_data={"path": path, "file_path": path, "content": "Process code_gen output"},
+                status=StepState.PENDING,
+                dependencies=frozenset(["code_gen"]),
+                estimated_time=1.0,
+                estimated_cost=0.02,
+            )
+        ]
+
+    def _build_native_tool_workflow(self, workflow_id: str, goal: str) -> list[WorkflowStep] | None:
+        goal_lower = goal.lower()
+        from workflow.step import StepState
+        
+        # 1. Folder creation
+        if any(kw in goal_lower for kw in ("create folder", "create directory", "make directory", "mkdir")):
+            path = ""
+            for kw in ("create folder", "create directory", "make directory", "mkdir"):
+                if kw in goal_lower:
+                    idx = goal_lower.index(kw)
+                    path = goal[idx + len(kw):].strip()
+                    break
+            if path:
+                path = path.strip("'\"")
+                return [
+                    WorkflowStep(
+                        step_id="mkdir",
+                        workflow_id=workflow_id,
+                        capability="run_command",
+                        input_data={"command": f"mkdir -p {path}"},
+                        status=StepState.PENDING,
+                        estimated_time=1.0,
+                    )
+                ]
+
+        # 2. File deletion
+        if any(kw in goal_lower for kw in ("delete file", "remove file", "delete folder", "remove folder", "rmdir", "rm ")):
+            path = ""
+            for kw in ("delete file", "remove file", "delete folder", "remove folder", "rmdir", "rm"):
+                if kw in goal_lower:
+                    idx = goal_lower.index(kw)
+                    path = goal[idx + len(kw):].strip()
+                    break
+            if path:
+                path = path.strip("'\"")
+                return [
+                    WorkflowStep(
+                        step_id="delete_path",
+                        workflow_id=workflow_id,
+                        capability="run_command",
+                        input_data={"command": f"rm -rf {path}"},
+                        status=StepState.PENDING,
+                        estimated_time=1.0,
+                    )
+                ]
+
+        # 3. File copy
+        if any(kw in goal_lower for kw in ("copy file", "copy folder", "cp ")):
+            import re
+            paths = re.findall(r"(?:/[a-zA-Z0-9_\-\.\~]+)+|[a-zA-Z0-9_\-\.\~]+", goal)
+            filtered_paths = [p for p in paths if p.lower() not in ("copy", "file", "folder", "cp", "to")]
+            if len(filtered_paths) >= 2:
+                src, dest = filtered_paths[0], filtered_paths[1]
+                return [
+                    WorkflowStep(
+                        step_id="copy_path",
+                        workflow_id=workflow_id,
+                        capability="run_command",
+                        input_data={"command": f"cp -r {src} {dest}"},
+                        status=StepState.PENDING,
+                        estimated_time=1.0,
+                    )
+                ]
+
+        # 4. File move / rename
+        if any(kw in goal_lower for kw in ("move file", "move folder", "rename file", "rename folder", "mv ")):
+            import re
+            paths = re.findall(r"(?:/[a-zA-Z0-9_\-\.\~]+)+|[a-zA-Z0-9_\-\.\~]+", goal)
+            filtered_paths = [p for p in paths if p.lower() not in ("move", "rename", "file", "folder", "mv", "to")]
+            if len(filtered_paths) >= 2:
+                src, dest = filtered_paths[0], filtered_paths[1]
+                return [
+                    WorkflowStep(
+                        step_id="move_path",
+                        workflow_id=workflow_id,
+                        capability="run_command",
+                        input_data={"command": f"mv {src} {dest}"},
+                        status=StepState.PENDING,
+                        estimated_time=1.0,
+                    )
+                ]
+                
+        # 5. Compound intents check (e.g. Create a login webpage or Create login.html)
+        has_create_keyword = any(kw in goal_lower for kw in ["create", "write", "generate", "build", "make", "save"])
+        has_file_target = any(kw in goal_lower for kw in ["page", "webpage", "website", "calculator", "script", "program", "login", ".py", ".html", ".css", ".js", ".json"])
+        if has_create_keyword and has_file_target:
+            return self._build_code_and_save_workflow(workflow_id, goal)
+            
+        return None

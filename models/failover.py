@@ -28,6 +28,7 @@ class FailoverEngine:
         quota_manager: Any,
         event_bus: Any = None,
         logger: logging.Logger | None = None,
+        metrics: Any = None,
     ) -> None:
         self.registry = registry
         self.selector = selector
@@ -35,6 +36,7 @@ class FailoverEngine:
         self.quota_manager = quota_manager
         self.event_bus = event_bus
         self.logger = logger or logging.getLogger("realtimex.models.failover")
+        self.metrics = metrics
 
     async def execute_with_failover(
         self,
@@ -115,6 +117,9 @@ class FailoverEngine:
                 total_tokens = response.token_usage.get("total_tokens", estimated_tokens)
                 self.quota_manager.consume(provider, total_tokens)
 
+                if self.metrics is not None:
+                    self.metrics.record_model_usage(provider, model, True, latency, total_tokens, len(exclude_set))
+
                 self._emit_event(
                     "RequestCompleted",
                     request.task_id,
@@ -138,6 +143,9 @@ class FailoverEngine:
                 if not self.health_monitor.is_model_healthy(provider, model):
                     self.registry.update_model_health(provider, model, "unhealthy")
                     self._emit_event("ProviderUnavailable", request.task_id, {"provider": provider, "model": model})
+
+                if self.metrics is not None:
+                    self.metrics.record_model_usage(provider, model, False, time.time() - start_time, estimated_tokens, len(exclude_set))
 
                 self._emit_event("RequestFailed", request.task_id, {"provider": provider, "model": model, "error": str(e)})
                 self._emit_event("FailoverTriggered", request.task_id, {"provider": provider, "model": model, "reason": "execution_failed"})

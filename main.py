@@ -20,7 +20,18 @@ MODULES_ROOT = PROJECT_ROOT / "modules"
 
 
 def main() -> None:
-    print("[BOOT] Realtimex Kernel v0.1\n")
+    # Check if debug mode is requested via --debug or -d
+    has_debug = False
+    args_to_check = list(sys.argv)
+    for dbg_arg in ("--debug", "-d"):
+        while dbg_arg in args_to_check:
+            has_debug = True
+            args_to_check.remove(dbg_arg)
+            
+    is_interactive = (len(args_to_check) == 1)
+    
+    if is_interactive:
+        print("[BOOT] Realtimex Kernel v0.1\n")
     
     # Load environment variables from .env file if present
     env_path = PROJECT_ROOT / ".env"
@@ -40,7 +51,7 @@ def main() -> None:
             pass
     
     # Check if setup mode is requested or config.json is missing
-    if (len(sys.argv) > 1 and sys.argv[1] == "setup") or not CONFIG_PATH.exists():
+    if (len(args_to_check) > 1 and args_to_check[1] == "setup") or not CONFIG_PATH.exists():
         from kernel.setup import run_setup
         success = run_setup()
         sys.exit(0 if success else 1)
@@ -53,7 +64,7 @@ def main() -> None:
     )
 
     # Check if doctor mode is requested
-    if len(sys.argv) > 1 and sys.argv[1] == "doctor":
+    if len(args_to_check) > 1 and args_to_check[1] == "doctor":
         from kernel.doctor import run_doctor
         success = run_doctor(api)
         sys.exit(0 if success else 1)
@@ -70,32 +81,23 @@ def main() -> None:
         sys.exit(1)
 
     # Check if developer mode is requested
-    if len(sys.argv) > 1 and sys.argv[1] == "dev":
+    if len(args_to_check) > 1 and args_to_check[1] == "dev":
         from kernel.dev_mode import run_developer_mode
         run_developer_mode(api)
         sys.exit(0)
     
-    print("✓ Configuration Loaded")
-    print("✓ Event Bus Started")
-    print("✓ Registry Initialized")
-    print("✓ Dependency Container Ready")
-    print("✓ Services Loaded")
-    print("✓ Lifecycle -> RUNNING\n")
-    print("Kernel ready.\n")
-
-    # Determine interactive vs single-command mode
-    # If arguments are passed, treat them as a single command. Otherwise run REPL loop.
-    is_interactive = (len(sys.argv) == 1)
+    if is_interactive:
+        print("✓ Configuration Loaded")
+        print("✓ Event Bus Started")
+        print("✓ Registry Initialized")
+        print("✓ Dependency Container Ready")
+        print("✓ Services Loaded")
+        print("✓ Lifecycle -> RUNNING\n")
+        print("Kernel ready.\n")
+ 
     single_cmd = None
     if not is_interactive:
-        single_cmd = " ".join(sys.argv[1:])
-    else:
-        # Mute all console logs during interactive REPL session to keep CLI clean
-        for logger_name in list(logging.Logger.manager.loggerDict.keys()) + ["realtimex"]:
-            logger = logging.getLogger(logger_name)
-            for handler in logger.handlers:
-                if isinstance(handler, logging.StreamHandler) and not isinstance(handler, logging.FileHandler):
-                    handler.setLevel(logging.CRITICAL)
+        single_cmd = " ".join(args_to_check[1:])
 
     cli = CLIInterface(
         user_id="user_cli",
@@ -111,13 +113,11 @@ def main() -> None:
     api.interface_manager.register_interface(cli)
     api.interface_manager.start_interface("cli")
     
-    print("==================================================")
-    print("🚀 Welcome to Realtimex CLI Interface")
     if is_interactive:
+        print("==================================================")
+        print("🚀 Welcome to Realtimex CLI Interface")
         print("Type your task/request or type 'exit'/'quit' to exit.")
-    else:
-        print(f"Executing: '{single_cmd}'")
-    print("==================================================\n")
+        print("==================================================\n")
 
     while True:
         try:

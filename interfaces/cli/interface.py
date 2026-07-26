@@ -150,6 +150,9 @@ class CLIInterface(Interface):
                 if response.message:
                     print(f"Message: {response.message}")
                 print()
+            elif response.status in ("success", "completed") and not response.metadata.get("task_id"):
+                if response.message:
+                    print(response.message)
         except Exception as e:
             self.logger.error("Error sending CLI response: %s", e)
 

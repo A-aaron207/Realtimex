@@ -88,18 +88,48 @@ class ModelSelector:
                 if model.model_name.lower() == pref or f"{model.provider_name.lower()}/{model.model_name.lower()}" == pref:
                     return model
 
-        # 5. Automatically prefer open-source models
-        open_source_models = [m for m in eligible_models if m.is_open_source]
-        if open_source_models:
-            eligible_models = open_source_models
+        # 5. Automatically prefer open-source models (unless overridden by config priorities)
+        # We will integrate this into our unified ranking key below.
 
-        # 6. Rank by Latency & Cost (Lower is better)
-        # Sort key: average latency, cost per 1k tokens, then context window size
-        def ranking_key(m: ModelMetadata) -> tuple[float, float, int]:
+        # 6. Rank by Config Priority, Latency, and Cost
+        # Resolve capabilities configuration from ServiceRegistry
+        from services.registry import ServiceRegistry
+        capabilities_cfg = {}
+        try:
+            reg = ServiceRegistry.get_instance()
+            if reg.exists("config_manager"):
+                config_mgr = reg.get("config_manager").metadata["manager"]
+                capabilities_cfg = config_mgr.get("model_gateway", {}).get("capabilities", {})
+        except Exception:
+            pass
+
+        cap_cfg = capabilities_cfg.get(request.capability_required, {})
+        primary_provider = cap_cfg.get("primary", {}).get("provider", "").lower()
+        primary_model = cap_cfg.get("primary", {}).get("model", "").lower()
+        fallback_provider = cap_cfg.get("fallback", {}).get("provider", "").lower()
+        fallback_model = cap_cfg.get("fallback", {}).get("model", "").lower()
+
+        def ranking_key(m: ModelMetadata) -> tuple[int, int, float, float, int]:
+            m_provider = m.provider_name.lower()
+            m_model = m.model_name.lower()
+            
+            # Priority: 0 for primary config, 1 for fallback config, 2 for other
+            priority = 2
+            if primary_provider and primary_model:
+                if m_provider == primary_provider and m_model == primary_model:
+                    priority = 0
+            if priority == 2 and fallback_provider and fallback_model:
+                if m_provider == fallback_provider and m_model == fallback_model:
+                    priority = 1
+            
+            # Prefer open-source (0 for open source, 1 for closed source)
+            is_closed = 0 if m.is_open_source else 1
+            
             latency = m.latency if m.latency > 0 else 0.5
             cost = m.cost_metadata.get("input_cost_1k", 0.0) + m.cost_metadata.get("output_cost_1k", 0.0)
+            
             # Higher context window size is a tie-breaker (negative so larger is sorted first)
-            return (latency, cost, -m.context_window)
+            return (priority, is_closed, latency, cost, -m.context_window)
 
         eligible_models.sort(key=ranking_key)
         return eligible_models[0]

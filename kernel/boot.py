@@ -771,14 +771,28 @@ def run_boot_sequence(paths: BootPaths) -> BootResult:
     dependency_container.register("permission_manager", resolved["Permission Manager"])
     dependency_container.register("platform", Platform.current())
 
-    # Register workflow_manager and memory_manager in service registry for module access
+    # Register workflow_manager, memory_manager, and task_manager in service registry for module access
     from services.base import SimpleService
-    resolved["Service Registry"].register(
-        SimpleService("workflow_manager", {"manager": resolved["Workflow Engine"]["workflow_manager"]})
-    )
-    resolved["Service Registry"].register(
-        SimpleService("memory_manager", {"manager": resolved["Memory Manager"]})
-    )
+    if not resolved["Service Registry"].exists("workflow_manager"):
+        resolved["Service Registry"].register(
+            SimpleService("workflow_manager", {"manager": resolved["Workflow Engine"]["workflow_manager"]})
+        )
+    if not resolved["Service Registry"].exists("memory_manager"):
+        resolved["Service Registry"].register(
+            SimpleService("memory_manager", {"manager": resolved["Memory Manager"]})
+        )
+    if not resolved["Service Registry"].exists("task_manager"):
+        resolved["Service Registry"].register(
+            SimpleService("task_manager", {"manager": resolved["Task System"]["task_manager"]})
+        )
+    if not resolved["Service Registry"].exists("permission_manager"):
+        resolved["Service Registry"].register(
+            SimpleService("permission_manager", {"manager": resolved["Permission Manager"]})
+        )
+    if not resolved["Service Registry"].exists("model_gateway"):
+        resolved["Service Registry"].register(
+            SimpleService("model_gateway", {"gateway": resolved["Model Gateway"]})
+        )
 
     boot_result = BootResult(
         config_manager=config_manager,

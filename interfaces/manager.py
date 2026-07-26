@@ -211,64 +211,74 @@ class InterfaceManager:
     def process_request(self, request: Request) -> Response:
         """
         Process a request.
-        
-        Routes request to handler and generates response.
-        
+
+        Routes request to handler and generates response. Always returns a
+        Response — never raises — so the conversation layer stays crash-free.
+
         Args:
             request: Request object
-            
+
         Returns:
-            Response object
-            
-        Raises:
-            InterfaceManagerError: If handler not set or processing fails
+            Response object (status="error" when handler is missing or fails)
         """
+        # Map request to its interface type for response routing (outside lock so
+        # we can safely reference it during event emission below)
         with self._lock:
-            if not self._request_handler:
-                raise InterfaceManagerError("Request handler not set")
-            
-            # Map request to its interface type for response routing
             self._request_interfaces[request.request_id] = request.interface_type
-            
-            try:
-                # Update session activity
-                if request.session_id:
-                    session = self.session_manager.get_session(request.session_id)
-                    if session:
-                        session.update_activity()
-                
-                # Emit request event
-                self._emit_event(
-                    InterfaceEventType.REQUEST_RECEIVED,
-                    {
-                        "request_id": request.request_id,
-                        "session_id": request.session_id,
-                        "interface_type": request.interface_type,
-                        "user_id": request.user_id,
-                    }
-                )
-                
-                # Call handler
-                response = self._request_handler(request)
-                
-                # Emit response event
-                self._emit_event(
-                    InterfaceEventType.RESPONSE_SENT,
-                    {
-                        "request_id": response.request_id,
-                        "status": response.status,
-                    }
-                )
-                
-                return response
-                
-            except Exception as e:
-                self.logger.error("Error processing request %s: %s", request.request_id, e)
-                return Response(
-                    request_id=request.request_id,
-                    status="error",
-                    message=f"Request processing failed: {e}"
-                )
+            handler = self._request_handler
+
+        # No handler registered — return a graceful error response instead of raising
+        if not handler:
+            self.logger.warning(
+                "process_request called with no handler set (request_id=%s)",
+                request.request_id,
+            )
+            return Response(
+                request_id=request.request_id,
+                status="error",
+                message="I'm not ready to handle requests yet. Please try again shortly.",
+            )
+
+        try:
+            # Update session activity
+            if request.session_id:
+                session = self.session_manager.get_session(request.session_id)
+                if session:
+                    session.update_activity()
+
+            # Emit request event
+            self._emit_event(
+                InterfaceEventType.REQUEST_RECEIVED,
+                {
+                    "request_id": request.request_id,
+                    "session_id": request.session_id,
+                    "interface_type": request.interface_type,
+                    "user_id": request.user_id,
+                }
+            )
+
+            # Call handler
+            response = handler(request)
+
+            # Emit response event
+            self._emit_event(
+                InterfaceEventType.RESPONSE_SENT,
+                {
+                    "request_id": response.request_id,
+                    "status": response.status,
+                }
+            )
+
+            return response
+
+        except Exception as e:
+            self.logger.error("Error processing request %s: %s", request.request_id, e)
+            # Do NOT expose raw exception class names or tracebacks to the user
+            return Response(
+                request_id=request.request_id,
+                status="error",
+                message="Something went wrong while processing your request. Please try again.",
+            )
     
     def create_session(
         self,

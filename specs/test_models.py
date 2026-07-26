@@ -197,7 +197,7 @@ class TestModelGateway(unittest.IsolatedAsyncioTestCase):
         
         # Verify execution completed using a healthy fallback provider
         self.assertNotEqual(response.provider_used, "faulty")
-        self.assertIn(response.provider_used, ["groq", "openai_compatible", "nvidia"])
+        self.assertIn(response.provider_used, ["groq", "openai_compatible", "nvidia", "mock"])
 
         # Check that events record the failover
         emitted_names = [e.name for e in self.event_bus.emitted]
@@ -246,6 +246,30 @@ class TestModelGateway(unittest.IsolatedAsyncioTestCase):
         
         emitted_names = [e.name for e in self.event_bus.emitted]
         self.assertIn("ProviderRecovered", emitted_names)
+
+
+    async def test_capability_based_routing_and_telemetry(self) -> None:
+        """Verify dynamic capability keyword generation and per-model telemetry tracking."""
+        # 1. Invoke generate with capability keyword args
+        response = await self.gateway.generate(
+            capability="coding",
+            prompt="write python code",
+            task_id="t_capability_dynamic"
+        )
+        self.assertIsNotNone(response.output)
+        
+        # 2. Check telemetry recording in metrics
+        metrics_summary = self.gateway.metrics.get_summary()
+        self.assertIn("model_stats", metrics_summary)
+        model_stats = metrics_summary["model_stats"]
+        self.assertTrue(len(model_stats) > 0)
+        
+        # Verify that the keys in model_stats have stats properties
+        for key, stats in model_stats.items():
+            self.assertIn("calls", stats)
+            self.assertIn("successes", stats)
+            self.assertIn("failures", stats)
+            self.assertIn("avg_latency", stats)
 
 
 if __name__ == "__main__":

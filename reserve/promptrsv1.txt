@@ -1,0 +1,638 @@
+This has evolved beyond a simple TODO list—it's now a legitimate **engineering roadmap**. If I were     
+   reviewing this as a software engineer, I'd rate it around **9.5/10**.                                   
+                                                                                                           
+   The remaining 0.5 comes from making it even more measurable.                                            
+                                                                                                           
+   ## What you've done well                                                                                
+                                                                                                           
+   * **Clear feature freeze.** Prevents scope creep.                                                       
+   * **Objective KPIs.** You're tracking reliability instead of feelings.                                  
+   * **Severity levels.** P0/P1/P2 help prioritize work.                                                   
+   * **Subsystem breakdown.** You know *where* the problems are.                                           
+   * **Performance budgets.** Great addition—performance is part of correctness.                           
+   * **End-to-end scenarios.** Much closer to real users than unit tests.                                  
+   * **Regression policy.** This is how mature projects stop repeating mistakes.                           
+                                                                                                           
+   That's exactly how professional engineering teams operate.                                              
+                                                                                                           
+   ---                                                                                                     
+                                                                                                           
+   # What I would still improve                                                                            
+                                                                                                           
+   ## 1. Add an Exit Criteria section                                                                      
+                                                                                                           
+   Right now the sprint doesn't explicitly define when it's over.                                          
+                                                                                                           
+   For example:                                                                                            
+                                                                                                           
+   ```text                                                                                                 
+   Reliability Sprint 1 Exit Criteria                                                                      
+                                                                                                           
+   Planner....................150/150                                                                      
+   Filesystem.................120/120                                                                      
+   Terminal...................100/100                                                                      
+   Browser....................90/90                                                                        
+   Git........................70/70                                                                        
+   Developer..................130/130                                                                      
+   Memory.....................100/100                                                                      
+   Conversation...............150/150                                                                      
+                                                                                                           
+   Overall Reliability........≥98%                                                                         
+                                                                                                           
+   Crash-free sessions........99.9%                                                                        
+                                                                                                           
+   No unresolved P0 issues                                                                                 
+                                                                                                           
+   No unresolved P1 issues                                                                                 
+                                                                                                           
+   Average task success.......≥95%                                                                         
+                                                                                                           
+   All end-to-end stories.....PASS                                                                         
+                                                                                                           
+   Regression suite...........100%                                                                         
+   ```                                                                                                     
+                                                                                                           
+   Then there is no debate about whether the sprint is finished.                                           
+                                                                                                           
+   ---                                                                                                     
+                                                                                                           
+   ## 2. Track trends, not snapshots                                                                       
+                                                                                                           
+   Instead of only                                                                                         
+                                                                                                           
+   ```                                                                                                     
+   Planner Accuracy                                                                                        
+   87%                                                                                                     
+   ```                                                                                                     
+                                                                                                           
+   track progress over time.                                                                               
+                                                                                                           
+   | Date   | Planner | Memory | Conversation | Overall |                                                  
+   | ------ | ------: | -----: | -----------: | ------: |                                                  
+   | Jul 20 |     87% |    71% |          69% |     86% |                                                  
+   | Jul 25 |     ... |    ... |          ... |     ... |                                                  
+   | Jul 30 |     ... |    ... |          ... |     ... |                                                  
+                                                                                                           
+   That tells you whether you're actually improving.                                                       
+                                                                                                           
+   ---                                                                                                     
+                                                                                                           
+   ## 3. Add Reliability Gates                                                                             
+                                                                                                           
+   Something like:                                                                                         
+                                                                                                           
+   ```                                                                                                     
+   Gate 1                                                                                                  
+   ✓ All unit tests                                                                                        
+                                                                                                           
+   Gate 2                                                                                                  
+   ✓ All integration tests                                                                                 
+                                                                                                           
+   Gate 3                                                                                                  
+   ✓ All E2E stories                                                                                       
+                                                                                                           
+   Gate 4                                                                                                  
+   ✓ Performance                                                                                           
+                                                                                                           
+   Gate 5                                                                                                  
+   ✓ Memory                                                                                                
+                                                                                                           
+   Gate 6                                                                                                  
+   ✓ UX                                                                                                    
+                                                                                                           
+   Gate 7                                                                                                  
+   ✓ Security                                                                                              
+                                                                                                           
+   Release                                                                                                 
+   ```                                                                                                     
+                                                                                                           
+   Think of it like a CI pipeline for the whole project.                                                   
+                                                                                                           
+   ---                                                                                                     
+                                                                                                           
+   ## 4. Introduce "Definition of Done"                                                                    
+                                                                                                           
+   For every bug fix:                                                                                      
+                                                                                                           
+   ```                                                                                                     
+   Definition of Done                                                                                      
+                                                                                                           
+   ✓ Bug fixed                                                                                             
+   ✓ Unit test added                                                                                       
+   ✓ Integration test passes                                                                               
+   ✓ Regression test added                                                                                 
+   ✓ Documentation updated                                                                                 
+   ✓ No performance regression                                                                             
+   ✓ No memory regression                                                                                  
+   ```                                                                                                     
+                                                                                                           
+   That prevents "fixes" that quietly break something else.                                                
+                                                                                                           
+   ---                                                                                                     
+                                                                                                           
+   ## 5. Separate Stability from Intelligence                                                              
+                                                                                                           
+   Right now Conversation mixes both.                                                                      
+                                                                                                           
+   I'd split it into:                                                                                      
+                                                                                                           
+   ### Reliability                                                                                         
+                                                                                                           
+   * crashes                                                                                               
+   * latency                                                                                               
+   * routing                                                                                               
+   * formatting                                                                                            
+   * consistency                                                                                           
+                                                                                                           
+   ### Intelligence                                                                                        
+                                                                                                           
+   * reasoning                                                                                             
+   * planning                                                                                              
+   * coding                                                                                                
+   * explanations                                                                                          
+   * creativity                                                                                            
+                                                                                                           
+   Those improve in different ways.                                                                        
+                                                                                                           
+   ---                                                                                                     
+                                                                                                           
+   # Biggest observation                                                                                   
+                                                                                                           
+   Looking at your dashboard:                                                                              
+                                                                                                           
+   ```                                                                                                     
+   Filesystem     100%                                                                                     
+                                                                                                           
+   Terminal        96%                                                                                     
+                                                                                                           
+   Developer       94%                                                                                     
+                                                                                                           
+   Git             96%                                                                                     
+                                                                                                           
+   Browser         90%                                                                                     
+                                                                                                           
+   Planner         87%                                                                                     
+                                                                                                           
+   Memory          71%                                                                                     
+                                                                                                           
+   Conversation    69%                                                                                     
+   ```                                                                                                     
+                                                                                                           
+   There's a clear pattern.                                                                                
+                                                                                                           
+   Your **infrastructure is already strong**.                                                              
+                                                                                                           
+   The weak parts are the ones that make the system feel "intelligent":                                    
+                                                                                                           
+   * Planner                                                                                               
+   * Memory                                                                                                
+   * Conversation                                                                                          
+                                                                                                           
+   That means your kernel and modules are no longer the bottleneck. The remaining work is about            
+   orchestration and user interaction.                                                                     
+                                                                                                           
+   ---                                                                                                     
+                                                                                                           
+   # If this were my roadmap                                                                               
+                                                                                                           
+   I'd tackle the remaining work in this exact order:                                                      
+                                                                                                           
+   ### Sprint 1A                                                                                           
+                                                                                                           
+   * Planner → 98%                                                                                         
+                                                                                                           
+   ### Sprint 1B                                                                                           
+                                                                                                           
+   * Memory → 95%                                                                                          
+                                                                                                           
+   ### Sprint 1C                                                                                           
+                                                                                                           
+   * Conversation → 95%                                                                                    
+                                                                                                           
+   ### Sprint 1D                                                                                           
+                                                                                                           
+   * Browser → 100%                                                                                        
+                                                                                                           
+   ### Sprint 1E                                                                                           
+                                                                                                           
+   * Developer + Git + Terminal → 100%                                                                     
+                                                                                                           
+   Only after that would I call **Reliability Sprint 1 complete**.                                         
+                                                                                                           
+   ---                                                                                                     
+                                                                                                           
+   I also like one strategic decision you've made without explicitly saying it: **you've frozen new        
+   features.** That's often what distinguishes projects that reach a polished 1.0 from projects that       
+   accumulate features but never become dependable. Once Realtimex consistently passes these reliability   
+   gates, you'll have a much stronger foundation for any future v2 capabilities.                           
+    and still.. The bottleneck is turning Realtimex from "it can do this" into "I trust it to do this      
+   every single time."                                                                                     
+                                                                                                           
+   If this were an engineering roadmap for a commercial CLI assistant, I'd organize the next improvements  
+   into six projects.                                                                                      
+                                                                                                           
+   Project A — Planner 2.0 (Highest Priority)                                                              
+                                                                                                           
+   Current:                                                                                                
+                                                                                                           
+   User                                                                                                    
+    ↓                                                                                                      
+   Intent                                                                                                  
+    ↓                                                                                                      
+   Capability                                                                                              
+    ↓                                                                                                      
+   Workflow                                                                                                
+    ↓                                                                                                      
+   Worker                                                                                                  
+                                                                                                           
+   Needs to become                                                                                         
+                                                                                                           
+   User                                                                                                    
+    ↓                                                                                                      
+   Intent                                                                                                  
+    ↓                                                                                                      
+   Goal Graph                                                                                              
+    ↓                                                                                                      
+   Planner                                                                                                 
+    ↓                                                                                                      
+   Validator                                                                                               
+    ↓                                                                                                      
+   Optimizer                                                                                               
+    ↓                                                                                                      
+   Executor                                                                                                
+                                                                                                           
+   Instead of                                                                                              
+                                                                                                           
+   "save file"                                                                                             
+                                                                                                           
+   it should think                                                                                         
+                                                                                                           
+   Goal:                                                                                                   
+                                                                                                           
+   Need file                                                                                               
+   ↓                                                                                                       
+   Need content                                                                                            
+   ↓                                                                                                       
+   Need filename                                                                                           
+   ↓                                                                                                       
+   Need destination                                                                                        
+   ↓                                                                                                       
+   Need write                                                                                              
+                                                                                                           
+   This removes almost every planner bug.                                                                  
+                                                                                                           
+   Project B — Memory Engine                                                                               
+                                                                                                           
+   Right now memory sounds like variables.                                                                 
+                                                                                                           
+   It should become an actual knowledge system.                                                            
+                                                                                                           
+   Example                                                                                                 
+                                                                                                           
+   Workspace:                                                                                              
+   ~/Projects/Realtimex                                                                                    
+                                                                                                           
+   Last generated:                                                                                         
+   calculator.py                                                                                           
+                                                                                                           
+   Preferred editor:                                                                                       
+   VSCode                                                                                                  
+                                                                                                           
+   Git branch:                                                                                             
+   feature/reliability                                                                                     
+                                                                                                           
+   Recent files:                                                                                           
+   ...                                                                                                     
+                                                                                                           
+   Then                                                                                                    
+                                                                                                           
+   User:                                                                                                   
+                                                                                                           
+   continue yesterday's work                                                                               
+                                                                                                           
+   should require zero explanation.                                                                        
+                                                                                                           
+   Project C — Tool Reliability                                                                            
+                                                                                                           
+   Every capability should receive a confidence score.                                                     
+                                                                                                           
+   Instead of                                                                                              
+                                                                                                           
+   run_command                                                                                             
+                                                                                                           
+   it becomes                                                                                              
+                                                                                                           
+   Capability:                                                                                             
+   run_command                                                                                             
+                                                                                                           
+   Confidence:                                                                                             
+   98%                                                                                                     
+                                                                                                           
+   Validation:                                                                                             
+   passed                                                                                                  
+                                                                                                           
+   Permission:                                                                                             
+   safe                                                                                                    
+                                                                                                           
+   If confidence drops                                                                                     
+                                                                                                           
+   Planner replans automatically.                                                                          
+                                                                                                           
+   Project D — Conversation Engine                                                                         
+                                                                                                           
+   This is where I think the biggest UX improvement is.                                                    
+                                                                                                           
+   Current:                                                                                                
+                                                                                                           
+   User                                                                                                    
+   ↓                                                                                                       
+                                                                                                           
+   LLM                                                                                                     
+   ↓                                                                                                       
+                                                                                                           
+   Response                                                                                                
+                                                                                                           
+   Should become                                                                                           
+                                                                                                           
+   User                                                                                                    
+   ↓                                                                                                       
+                                                                                                           
+   Intent                                                                                                  
+                                                                                                           
+   ↓                                                                                                       
+                                                                                                           
+   Native?                                                                                                 
+                                                                                                           
+   ↓                                                                                                       
+                                                                                                           
+   Tool?                                                                                                   
+                                                                                                           
+   ↓                                                                                                       
+                                                                                                           
+   LLM?                                                                                                    
+                                                                                                           
+   ↓                                                                                                       
+                                                                                                           
+   Response synthesizer                                                                                    
+                                                                                                           
+   ↓                                                                                                       
+                                                                                                           
+   Final answer                                                                                            
+                                                                                                           
+   The user never sees                                                                                     
+                                                                                                           
+   No output found                                                                                         
+                                                                                                           
+   SUCCESS                                                                                                 
+                                                                                                           
+   DONE                                                                                                    
+                                                                                                           
+   Task complete                                                                                           
+                                                                                                           
+   Instead                                                                                                 
+                                                                                                           
+   Done.                                                                                                   
+                                                                                                           
+   Created:                                                                                                
+                                                                                                           
+   Desktop/                                                                                                
+    └── calculator.py                                                                                      
+                                                                                                           
+   The file contains a Tkinter calculator and is ready to run.                                             
+                                                                                                           
+   The assistant should always narrate results.                                                            
+                                                                                                           
+   Project E — Execution Engine                                                                            
+                                                                                                           
+   Currently                                                                                               
+                                                                                                           
+   Task                                                                                                    
+                                                                                                           
+   ↓                                                                                                       
+                                                                                                           
+   Worker                                                                                                  
+                                                                                                           
+   ↓                                                                                                       
+                                                                                                           
+   Done                                                                                                    
+                                                                                                           
+   Eventually                                                                                              
+                                                                                                           
+   Task                                                                                                    
+                                                                                                           
+   ↓                                                                                                       
+                                                                                                           
+   Worker                                                                                                  
+                                                                                                           
+   ↓                                                                                                       
+                                                                                                           
+   Validator                                                                                               
+                                                                                                           
+   ↓                                                                                                       
+                                                                                                           
+   Retry                                                                                                   
+                                                                                                           
+   ↓                                                                                                       
+                                                                                                           
+   Alternative Tool                                                                                        
+                                                                                                           
+   ↓                                                                                                       
+                                                                                                           
+   LLM Repair                                                                                              
+                                                                                                           
+   ↓                                                                                                       
+                                                                                                           
+   Done                                                                                                    
+                                                                                                           
+   Example                                                                                                 
+                                                                                                           
+   mkdir failed                                                                                            
+                                                                                                           
+   ↓                                                                                                       
+                                                                                                           
+   check permissions                                                                                       
+                                                                                                           
+   ↓                                                                                                       
+                                                                                                           
+   retry                                                                                                   
+                                                                                                           
+   ↓                                                                                                       
+                                                                                                           
+   still failed                                                                                            
+                                                                                                           
+   ↓                                                                                                       
+                                                                                                           
+   suggest Documents instead                                                                               
+                                                                                                           
+   ↓                                                                                                       
+                                                                                                           
+   success                                                                                                 
+                                                                                                           
+   The user shouldn't need to intervene.                                                                   
+                                                                                                           
+   Project F — Capability Intelligence                                                                     
+                                                                                                           
+   This is where Realtimex becomes much smarter.                                                           
+                                                                                                           
+   Instead of                                                                                              
+                                                                                                           
+   Capabilities:                                                                                           
+   120                                                                                                     
+                                                                                                           
+   Treat each capability as a small expert.                                                                
+                                                                                                           
+   Example                                                                                                 
+                                                                                                           
+   Filesystem Expert                                                                                       
+                                                                                                           
+   Git Expert                                                                                              
+                                                                                                           
+   Docker Expert                                                                                           
+                                                                                                           
+   Browser Expert                                                                                          
+                                                                                                           
+   Python Expert                                                                                           
+                                                                                                           
+   Terminal Expert                                                                                         
+                                                                                                           
+   Vision Expert                                                                                           
+                                                                                                           
+   The planner asks                                                                                        
+                                                                                                           
+   Filesystem,                                                                                             
+                                                                                                           
+   can you solve this?                                                                                     
+                                                                                                           
+                                                                                                           
+   instead of blindly choosing tools.                                                                      
+                                                                                                           
+   Biggest Architectural Improvement                                                                       
+                                                                                                           
+   This is the one thing I would build after Reliability Sprint 1.                                         
+                                                                                                           
+   Introduce an Action Validator                                                                           
+                                                                                                           
+   Every plan passes through                                                                               
+                                                                                                           
+   Planner                                                                                                 
+                                                                                                           
+   ↓                                                                                                       
+                                                                                                           
+   Action Validator                                                                                        
+                                                                                                           
+   ↓                                                                                                       
+                                                                                                           
+   Executor                                                                                                
+                                                                                                           
+   Validator checks                                                                                        
+                                                                                                           
+   ✓ parameters exist                                                                                      
+                                                                                                           
+   ✓ files exist                                                                                           
+                                                                                                           
+   ✓ variables resolved                                                                                    
+                                                                                                           
+   ✓ permissions                                                                                           
+                                                                                                           
+   ✓ tool available                                                                                        
+                                                                                                           
+   ✓ destination valid                                                                                     
+                                                                                                           
+   ✓ overwrite risk                                                                                        
+                                                                                                           
+   ✓ confidence                                                                                            
+                                                                                                           
+   before execution.                                                                                       
+                                                                                                           
+   This one layer would eliminate a large percentage of the bugs you've encountered.                       
+                                                                                                           
+   Biggest UX Improvement                                                                                  
+                                                                                                           
+   Never expose internal execution.                                                                        
+                                                                                                           
+   Bad                                                                                                     
+                                                                                                           
+   SUCCESS                                                                                                 
+                                                                                                           
+   Bad                                                                                                     
+                                                                                                           
+   Task completed                                                                                          
+                                                                                                           
+   Bad                                                                                                     
+                                                                                                           
+   Response generated                                                                                      
+                                                                                                           
+   Good                                                                                                    
+                                                                                                           
+   Created:                                                                                                
+                                                                                                           
+   Desktop/                                                                                                
+   └── login.html                                                                                          
+                                                                                                           
+   The page contains:                                                                                      
+   • Username field                                                                                        
+   • Password field                                                                                        
+   • Login button                                                                                          
+   • Responsive styling                                                                                    
+                                                                                                           
+   Open it with:                                                                                           
+                                                                                                           
+   firefox ~/Desktop/login.html                                                                            
+                                                                                                           
+   The assistant should always answer the user's request, not report the system's status.                  
+                                                                                                           
+   Biggest Engineering Improvement                                                                         
+                                                                                                           
+   Your tests are mostly module tests.                                                                     
+                                                                                                           
+   You need far more scenario tests.                                                                       
+                                                                                                           
+   For example:                                                                                            
+                                                                                                           
+   Developer Day                                                                                           
+                                                                                                           
+   Create project                                                                                          
+                                                                                                           
+   ↓                                                                                                       
+                                                                                                           
+   Generate code                                                                                           
+                                                                                                           
+   ↓                                                                                                       
+                                                                                                           
+   Run code                                                                                                
+                                                                                                           
+   ↓                                                                                                       
+                                                                                                           
+   Fix bug                                                                                                 
+                                                                                                           
+   ↓                                                                                                       
+                                                                                                           
+   Run again                                                                                               
+                                                                                                           
+   ↓                                                                                                       
+                                                                                                           
+   Commit                                                                                                  
+                                                                                                           
+   ↓                                                                                                       
+                                                                                                           
+   Push                                                                                                    
+                                                                                                           
+   ↓                                                                                                       
+                                                                                                           
+   Done                                                                                                    
+                                                                                                           
+   One scenario like this tests twenty subsystems simultaneously.                                          
+                                                                                                           
+   Those are the tests that uncover real-world failures.                                                   
+                                                                                                           
+   What I would prioritize next                                                                            
+   Planner reliability (98%+ capability selection)                                                         
+   Memory reliability (variables, task outputs, workspace context)                                         
+   Action Validator before execution                                                                       
+   Response synthesizer that converts raw tool output into user-friendly responses                         
+   End-to-end scenario tests (developer, researcher, sysadmin, casual user)                                
+   Boot-time optimization (reduce from ~860 ms toward your <500 ms target)                                 
+                                                                                                           
+   Once those are solid, then I'd consider larger features such as voice interaction, autonomous           
+   background agents, or more sophisticated multi-model orchestration. At that point, Realtimex would have 
+   a dependable foundation rather than accumulating technical debt through additional capabilities. 

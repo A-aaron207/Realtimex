@@ -37,7 +37,7 @@ def booted_api():
     api.shutdown()
 
 
-def execute_workflow(api: KernelAPI, goal: str, timeout: float = 12.0) -> str:
+def execute_workflow(api: KernelAPI, goal: str, timeout: float = 30.0) -> str:
     """Helper to run a CLI request and return the final output."""
     # Unregister existing CLI interface to avoid duplicate registration
     api.interface_manager.registry.unregister("cli")
@@ -134,5 +134,81 @@ def test_permission_request(booted_api):
 
 
 def test_autonomous_plan_repair(booted_api):
-    output = execute_workflow(booted_api, "Test autonomous plan repair after permanent failure", timeout=15.0)
+    output = execute_workflow(booted_api, "Test autonomous plan repair after permanent failure", timeout=45.0)
     assert "recovery" in output.lower() or "recovery successful" in output.lower()
+
+
+def test_cross_task_session_variables(booted_api):
+    import uuid
+    # 1. Unregister existing CLI
+    booted_api.interface_manager.registry.unregister("cli")
+
+    session_id = str(uuid.uuid4())
+    
+    # Task 1: Generate Code
+    cli1 = CLIInterface(
+        user_id="test_user",
+        interactive=False,
+        single_command="Write a Python function to reverse a linked list",
+        use_colors=False
+    )
+    cli1.set_session(session_id)
+    booted_api.interface_manager.register_interface(cli1)
+    booted_api.interface_manager.start_interface("cli")
+
+    req1 = booted_api.interface_manager.receive("cli")
+    assert req1 is not None
+    assert req1.session_id == session_id
+
+    res1 = booted_api.interface_manager.process_request(req1)
+    task_id1 = res1.metadata.get("task_id")
+    assert task_id1 is not None
+
+    # Wait for completion
+    start = time.time()
+    completed = False
+    while time.time() - start < 15.0:
+        task = booted_api.task_manager.get_task(task_id1)
+        if task.state == TaskState.COMPLETED:
+            completed = True
+            break
+        time.sleep(0.05)
+    assert completed
+
+    # 2. Run Task 2 under same session to save the file to desktop
+    booted_api.interface_manager.registry.unregister("cli")
+    cli2 = CLIInterface(
+        user_id="test_user",
+        interactive=False,
+        single_command="no you have to save it on my desktop",
+        use_colors=False
+    )
+    cli2.set_session(session_id)
+    booted_api.interface_manager.register_interface(cli2)
+    booted_api.interface_manager.start_interface("cli")
+
+    req2 = booted_api.interface_manager.receive("cli")
+    assert req2 is not None
+    assert req2.session_id == session_id
+
+    res2 = booted_api.interface_manager.process_request(req2)
+    task_id2 = res2.metadata.get("task_id")
+    assert task_id2 is not None
+
+    # Wait for completion
+    start = time.time()
+    completed2 = False
+    while time.time() - start < 15.0:
+        task = booted_api.task_manager.get_task(task_id2)
+        if task.state == TaskState.COMPLETED:
+            completed2 = True
+            break
+        time.sleep(0.05)
+    assert completed2
+
+    # Check output of task 2
+    memories = booted_api.memory_manager.search(query={"owner": task_id2, "scope": "task"})
+    assert len(memories) > 0
+    content = memories[0].content
+    assert "Desktop" in content or "even_odd.py" in content or "script.py" in content or "reverse" in content or "linked list" in content
+

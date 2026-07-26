@@ -65,7 +65,7 @@ class CognitiveEngine:
         )
         self.validator = CognitiveValidator()
         self.cache = CognitiveCache(default_ttl=cache_ttl)
-        self.event_bus = event_manager.event_bus if event_manager is not None else None
+        self.event_bus = getattr(event_manager, "event_bus", None) if event_manager is not None else None
 
         self.pipeline = ReasoningPipeline(
             provider=self.provider,
@@ -186,8 +186,17 @@ class CognitiveEngine:
             )
         elif "recovery" in analysis_type_lower:
             reason = "unknown"
-            if additional_context and "failure_reason" in additional_context:
-                reason = additional_context["failure_reason"]
+            if additional_context:
+                # Support flat key: {"failure_reason": "..."} 
+                if "failure_reason" in additional_context:
+                    reason = additional_context["failure_reason"]
+                # Support nested path: {"task": {"metadata": {"failure_reason": "..."}}}
+                elif (
+                    isinstance(additional_context.get("task"), dict)
+                    and isinstance(additional_context["task"].get("metadata"), dict)
+                    and "failure_reason" in additional_context["task"]["metadata"]
+                ):
+                    reason = additional_context["task"]["metadata"]["failure_reason"]
             return self.analyzer.recommend_recovery(
                 task_id=task_id,
                 objective=objective,

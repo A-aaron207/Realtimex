@@ -23,9 +23,12 @@ from memory.policies import MemoryPolicy, PolicyEnforcer
 from memory.registry import MemoryRecord, MemoryRegistry, MemoryScope
 from memory.retrieval import MemoryRetrieval
 from memory.search import MemorySearchQuery, MemorySearcher
+from memory.artifact_memory import ArtifactMemoryStore, ArtifactRecord
 from memory.stores.ephemeral_store import EphemeralMemoryStore
 from memory.stores.global_store import GlobalMemoryStore
 from memory.stores.task_store import TaskMemoryStore
+from memory.task_trajectory import TaskTrajectoryRecord, TaskTrajectoryStore
+from memory.workspace import WorkspaceContext, WorkspaceMemoryStore
 
 
 class MemoryManager:
@@ -57,6 +60,11 @@ class MemoryManager:
         self.global_store = GlobalMemoryStore(persistence=self.persistence)
         self.task_store = TaskMemoryStore(persistence=self.persistence)
         self.ephemeral_store = EphemeralMemoryStore()
+
+        # Memory 2.0 Subsystems
+        self.workspace_store = WorkspaceMemoryStore()
+        self.trajectory_store = TaskTrajectoryStore()
+        self.artifact_store = ArtifactMemoryStore()
 
         self.retrieval = MemoryRetrieval(
             registry=self.registry,

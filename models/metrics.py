@@ -25,6 +25,7 @@ class GatewayMetrics:
         self._calls_by_provider: dict[str, int] = {}
         self._tokens_by_provider: dict[str, int] = {}
         self._cost_by_provider: dict[str, float] = {}
+        self._model_stats: dict[str, dict[str, Any]] = {}
 
     def record_request(self) -> None:
         with self._lock:
@@ -41,6 +42,40 @@ class GatewayMetrics:
     def record_failover(self) -> None:
         with self._lock:
             self.failover_triggers += 1
+
+    def record_model_usage(
+        self,
+        provider: str,
+        model: str,
+        success: bool,
+        latency: float,
+        tokens: int,
+        retries: int = 0,
+    ) -> None:
+        key = f"{provider.lower()}/{model}"
+        with self._lock:
+            if key not in self._model_stats:
+                self._model_stats[key] = {
+                    "calls": 0,
+                    "successes": 0,
+                    "failures": 0,
+                    "retries": 0,
+                    "tokens": 0,
+                    "total_latency": 0.0,
+                    "avg_latency": 0.0,
+                    "success_rate": 0.0,
+                }
+            stats = self._model_stats[key]
+            stats["calls"] += 1
+            if success:
+                stats["successes"] += 1
+            else:
+                stats["failures"] += 1
+            stats["retries"] += retries
+            stats["tokens"] += tokens
+            stats["total_latency"] += latency
+            stats["avg_latency"] = round(stats["total_latency"] / stats["calls"], 3)
+            stats["success_rate"] = round((stats["successes"] / stats["calls"]) * 100, 1)
 
     def record_provider_usage(
         self,
@@ -78,6 +113,7 @@ class GatewayMetrics:
                 "calls_by_provider": dict(self._calls_by_provider),
                 "tokens_by_provider": dict(self._tokens_by_provider),
                 "cost_by_provider": dict(self._cost_by_provider),
+                "model_stats": dict(self._model_stats),
             }
 
     def reset(self) -> None:
@@ -90,3 +126,4 @@ class GatewayMetrics:
             self._calls_by_provider.clear()
             self._tokens_by_provider.clear()
             self._cost_by_provider.clear()
+            self._model_stats.clear()

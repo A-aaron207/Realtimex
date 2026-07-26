@@ -106,13 +106,32 @@ class Module(ModuleEntryPoint):
                 pass
 
     def install_package(self, input_data: dict[str, Any]) -> dict[str, Any]:
-        """Install a PyPI package using pip."""
+        """Install a PyPI package using pip with package name and existence validation."""
         package = input_data.get("package") or input_data.get("name")
         version = input_data.get("version")  # optional pinned version, e.g. "1.2.3"
         upgrade = input_data.get("upgrade", False)
 
         if not package:
             return {"status": "FAILED", "error": "No package name provided."}
+
+        # Validate package name format
+        import re
+        if not re.match(r"^[a-zA-Z0-9_\-\.]+$", package):
+            return {"status": "FAILED", "error": f"Invalid package name format: '{package}'."}
+
+        # Check if package exists on PyPI (non-blocking fallback if offline)
+        import urllib.request
+        import urllib.error
+        try:
+            url = f"https://pypi.org/pypi/{package}/json"
+            with urllib.request.urlopen(url, timeout=2.0) as response:
+                pass
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                return {"status": "FAILED", "error": f"Package '{package}' does not exist on PyPI."}
+        except Exception:
+            # Network timeout/offline: allow execution to fall through to pip directly
+            pass
 
         pkg_spec = f"{package}=={version}" if version else package
         cmd = [sys.executable, "-m", "pip", "install", pkg_spec]

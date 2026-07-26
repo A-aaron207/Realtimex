@@ -5,7 +5,7 @@
     "environment": "production"
   },
   "logging": {
-    "level": "DEBUG",
+    "level": "INFO",
     "filename": "kernel.log"
   },
   "event_bus": {
@@ -48,6 +48,118 @@
       },
       "mock": {
         "model": "mock-model"
+      }
+    },
+    "capabilities": {
+      "reasoning": {
+        "primary": {
+          "provider": "openrouter",
+          "model": "deepseek/deepseek-r1"
+        },
+        "fallback": {
+          "provider": "groq",
+          "model": "llama-3.3-70b"
+        }
+      },
+      "coding": {
+        "primary": {
+          "provider": "groq",
+          "model": "qwen-coder"
+        },
+        "fallback": {
+          "provider": "openrouter",
+          "model": "meta-llama/llama-3.1-70b-instruct"
+        }
+      },
+      "chat": {
+        "primary": {
+          "provider": "groq",
+          "model": "gemma"
+        },
+        "fallback": {
+          "provider": "openrouter",
+          "model": "meta-llama/llama-3.1-70b-instruct"
+        }
+      },
+      "vision": {
+        "primary": {
+          "provider": "openrouter",
+          "model": "google/gemini-flash-1.5"
+        },
+        "fallback": {
+          "provider": "gemini",
+          "model": "gemini-1.5-flash"
+        }
+      },
+      "summarization": {
+        "primary": {
+          "provider": "groq",
+          "model": "llama-3.3-70b"
+        },
+        "fallback": {
+          "provider": "openrouter",
+          "model": "meta-llama/llama-3.1-70b-instruct"
+        }
+      },
+      "classification": {
+        "primary": {
+          "provider": "groq",
+          "model": "llama-3.3-70b"
+        },
+        "fallback": {
+          "provider": "openrouter",
+          "model": "meta-llama/llama-3.1-70b-instruct"
+        }
+      },
+      "planning": {
+        "primary": {
+          "provider": "openrouter",
+          "model": "deepseek/deepseek-r1"
+        },
+        "fallback": {
+          "provider": "groq",
+          "model": "llama-3.3-70b"
+        }
+      },
+      "repair": {
+        "primary": {
+          "provider": "openrouter",
+          "model": "deepseek/deepseek-r1"
+        },
+        "fallback": {
+          "provider": "groq",
+          "model": "llama-3.3-70b"
+        }
+      },
+      "translation": {
+        "primary": {
+          "provider": "groq",
+          "model": "gemma"
+        },
+        "fallback": {
+          "provider": "openrouter",
+          "model": "meta-llama/llama-3.1-70b-instruct"
+        }
+      },
+      "tool_selection": {
+        "primary": {
+          "provider": "groq",
+          "model": "gemma"
+        },
+        "fallback": {
+          "provider": "openrouter",
+          "model": "meta-llama/llama-3.1-70b-instruct"
+        }
+      },
+      "intent_detection": {
+        "primary": {
+          "provider": "groq",
+          "model": "gemma"
+        },
+        "fallback": {
+          "provider": "openrouter",
+          "model": "meta-llama/llama-3.1-70b-instruct"
+        }
       }
     }
   }

@@ -75,7 +75,11 @@ class _PrioritizedEvent:
         self.event = event
 
     def __lt__(self, other: object) -> bool:  # type: ignore[override]
-        return self.sort_key < other.sort_key
+        if isinstance(other, _SentinelEvent):
+            return True
+        if hasattr(other, "sort_key"):
+            return self.sort_key < other.sort_key
+        return False
 
 
 class EventBus:
