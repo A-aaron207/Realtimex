@@ -154,6 +154,19 @@ class Dispatcher:
             if loaded_mod and hasattr(loaded_mod, "manifest"):
                 permissions = loaded_mod.manifest.permissions
 
+        # Extract security context from parent task
+        user_role = "admin"
+        user_id = ""
+        auth_context = {}
+        try:
+            parent_task = self._task_manager.get_task(workflow.parent_task_id)
+            if parent_task and hasattr(parent_task, "metadata") and isinstance(parent_task.metadata, dict):
+                user_role = parent_task.metadata.get("role") or parent_task.metadata.get("user_role") or "admin"
+                user_id = parent_task.metadata.get("user_id", "")
+                auth_context = parent_task.metadata.get("auth_context", {})
+        except Exception:
+            pass
+
         attempt = self._retry_manager.get_attempts(step.step_id)
         context = ExecutionContext(
             task_id=workflow.parent_task_id,
@@ -164,6 +177,9 @@ class Dispatcher:
             configuration={"provider_id": provider_id},
             permissions=permissions,
             metadata={"attempt": attempt},
+            user_role=user_role,
+            user_id=user_id,
+            auth_context=auth_context,
         )
 
         try:

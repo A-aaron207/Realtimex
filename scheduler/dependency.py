@@ -97,15 +97,8 @@ class DependencyResolver:
             self._logger.debug("No capability providers registered for step %s capability '%s'", step.step_id, step.capability)
             return False
 
-        # 5. Check worker availability in pool
-        pool = self._worker_manager.get_pool(step.capability)
-        if not pool:
-            self._logger.debug("No worker pool exists for step %s capability '%s'", step.step_id, step.capability)
-            return False
-
-        # Check if there's at least one idle worker
-        idle_worker_exists = any(w.state == "IDLE" for w in pool._workers.values())
-        if not idle_worker_exists:
+        # 5. Check worker availability via public WorkerManager API
+        if not self._worker_manager.has_idle_worker(step.capability):
             self._logger.debug("No idle workers currently available for step %s capability '%s'", step.step_id, step.capability)
             return False
 

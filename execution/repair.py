@@ -80,6 +80,84 @@ class ExecutionRepairEngine:
                 except Exception as e:
                     self.logger.warning("Failed to setup fallback directory %s: %s", fallback_file, e)
 
+        elif strategy == "resolve_missing_file_path":
+            desktop_dir = Path.home() / "Desktop"
+            target_dir = desktop_dir if desktop_dir.exists() else fallback_path
+            content = str(repaired.get("content") or repaired.get("data") or "")
+            ext = ".html" if ("<html" in content.lower() or "<!doctype" in content.lower()) else ".txt"
+            target_path = target_dir / f"saved_output{ext}"
+            try:
+                target_path.parent.mkdir(parents=True, exist_ok=True)
+                repaired["file_path"] = str(target_path)
+                repaired["path"] = str(target_path)
+                self.logger.info("Resolved missing file path to: %s", target_path)
+                return RepairResult(
+                    success=True,
+                    strategy_used=strategy,
+                    repaired_input=repaired,
+                    message=f"Resolved missing file path to '{target_path}'",
+                )
+            except Exception as e:
+                self.logger.warning("Failed to resolve missing file path: %s", e)
+
+        elif strategy == "llm_code_repair":
+            file_path = repaired.get("file_path") or repaired.get("path")
+            command = repaired.get("command", "")
+            # If command ran a python file e.g. "python3 test_calc.py", extract test_calc.py
+            if not file_path and command:
+                parts = command.split()
+                for part in parts:
+                    clean_part = part.strip("'\"")
+                    if clean_part.endswith(".py") and os.path.exists(clean_part):
+                        file_path = clean_part
+                        break
+
+            if file_path and os.path.exists(file_path):
+                try:
+                    from services.registry import ServiceRegistry
+                    reg = ServiceRegistry.get_instance()
+                    dev_service = reg.get("developer")
+                    if dev_service:
+                        dev_module = dev_service.metadata.get("module")
+                        if dev_module:
+                            fix_result = dev_module.debug_code({
+                                "file_path": file_path,
+                                "error_message": error_msg,
+                            })
+                            if fix_result.get("status") == "SUCCESS":
+                                self.logger.info("LLM code repair succeeded for file %s", file_path)
+                                return RepairResult(
+                                    success=True,
+                                    strategy_used=strategy,
+                                    repaired_input=repaired,
+                                    message=f"Auto-repaired code in '{file_path}' via LLM debugger",
+                                )
+                except Exception as ex:
+                    self.logger.warning("LLM code repair failed: %s", ex)
+            elif repaired.get("code"):
+                try:
+                    from services.registry import ServiceRegistry
+                    reg = ServiceRegistry.get_instance()
+                    dev_service = reg.get("developer")
+                    if dev_service:
+                        dev_module = dev_service.metadata.get("module")
+                        if dev_module:
+                            fix_result = dev_module.debug_code({
+                                "code": repaired.get("code"),
+                                "error_message": error_msg,
+                            })
+                            if fix_result.get("status") == "SUCCESS" and fix_result.get("fixed_code"):
+                                repaired["code"] = fix_result["fixed_code"]
+                                self.logger.info("LLM in-memory snippet repair succeeded")
+                                return RepairResult(
+                                    success=True,
+                                    strategy_used=strategy,
+                                    repaired_input=repaired,
+                                    message="Auto-repaired code snippet via LLM debugger",
+                                )
+                except Exception as ex:
+                    self.logger.warning("LLM snippet repair failed: %s", ex)
+
         elif strategy in ("retry_command", "retry_default", "retry_with_backoff", "retry_network"):
             # Pass through for retry
             return RepairResult(
@@ -95,3 +173,4 @@ class ExecutionRepairEngine:
             repaired_input=input_data,
             message=f"No deterministic local repair available for strategy '{strategy}'",
         )
+

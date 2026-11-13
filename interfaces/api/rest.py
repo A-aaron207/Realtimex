@@ -34,10 +34,28 @@ class RESTRequestHandler(BaseHTTPRequestHandler):
     
     def _send_json(self, status_code: int, data: Any) -> None:
         """Helper to send JSON response."""
-        self.send_response(status_code)
-        self.send_header('Content-Type', 'application/json')
-        self.end_headers()
-        self.wfile.write(json.dumps(data, default=str).encode('utf-8'))
+        try:
+            self.send_response(status_code)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.send_header('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS')
+            self.send_header('Access-Control-Allow-Headers', 'Content-Type, Authorization')
+            self.end_headers()
+            self.wfile.write(json.dumps(data, default=str).encode('utf-8'))
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
+    def do_OPTIONS(self) -> None:
+        """Handle CORS preflight requests."""
+        try:
+            self.send_response(204)
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.send_header('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS')
+            self.send_header('Access-Control-Allow-Headers', 'Content-Type, Authorization')
+            self.send_header('Content-Length', '0')
+            self.end_headers()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
 
     def do_POST(self) -> None:
         """Handle POST requests."""
@@ -81,11 +99,11 @@ class RESTRequestHandler(BaseHTTPRequestHandler):
                 self.rest_interface.increment_requests()
                 event = self.rest_interface.queue_request(request)
                 
-                # Wait for response (5.0s timeout)
-                response = self.rest_interface.get_response(request.request_id, timeout=5.0)
+                # Wait for response (25.0s timeout)
+                response = self.rest_interface.get_response(request.request_id, timeout=25.0)
                 
                 if response:
-                    if response.status == "success":
+                    if response.status in ("success", "completed"):
                         self.rest_interface.increment_successful()
                         self._send_json(201, response.to_dict())
                     else:
@@ -96,6 +114,7 @@ class RESTRequestHandler(BaseHTTPRequestHandler):
                     self.rest_interface.increment_successful()
                     self._send_json(202, {
                         "request_id": request.request_id,
+                        "task_id": request.request_id,
                         "status": "accepted",
                         "message": "Task creation request accepted, processing asynchronously."
                     })

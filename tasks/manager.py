@@ -165,6 +165,9 @@ class TaskManager:
             self._logger.info("Task %s state updated: %s -> %s", task_id, old_state.value, new_state.value)
             return updated_task
 
+    # Alias for update_state
+    transition = update_state
+
     def _emit_state_change_events(self, task: Task, old_state: TaskState, new_state: TaskState) -> None:
         """Emit specific and general events for task state updates."""
         # Generic update event

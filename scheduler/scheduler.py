@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import logging
 import threading
-import time
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
@@ -266,9 +265,9 @@ class Scheduler:
                 self._logger.info("Scheduling dependencies satisfied for step %s. Dispatching...", step.step_id)
                 self._dispatcher.dispatch_async(step, item.priority, item.queued_at)
             else:
-                # Put back into queue and wait briefly to avoid hot loops
-                self._logger.debug("Step %s cannot be scheduled yet. Re-enqueuing.", step.step_id)
-                
-                # Push back with delayed ready_at to give others preference
+                # Re-enqueue the step and then wait (event-driven) for a worker
+                # to become available — eliminates the busy-poll / sleep(0.05) pattern
+                # that burned CPU under saturation (Architecture Audit CRITICAL #2).
+                self._logger.debug("Step %s cannot be scheduled yet. Re-enqueuing and waiting for idle worker.", step.step_id)
                 self._re_enqueue(step, datetime.now(timezone.utc))
-                time.sleep(0.05)
+                self._worker_manager.wait_for_idle_worker(timeout=1.0)

@@ -1,0 +1,786 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>REALTIMEX — Kernel Interface</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Share+Tech+Mono&family=Rajdhani:wght@300;400;600&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --cyan:    #00e5ff;
+      --orange:  #ff6d00;
+      --blue:    #0d47a1;
+      --dim:     #012030;
+      --panel:   rgba(0, 15, 35, 0.82);
+      --border:  rgba(0, 229, 255, 0.35);
+      --glow:    0 0 18px rgba(0,229,255,0.55), 0 0 40px rgba(0,229,255,0.2);
+      --oglow:   0 0 18px rgba(255,109,0,0.6);
+    }
+
+    html, body {
+      width: 100%; height: 100%;
+      overflow: hidden;
+      background: #000d1a;
+      color: var(--cyan);
+      font-family: 'Share Tech Mono', monospace;
+    }
+
+    /* ── Three.js canvas ── */
+    #bg-canvas {
+      position: fixed; top: 0; left: 0;
+      width: 100%; height: 100%;
+      z-index: 0;
+    }
+
+    /* ── Scanline overlay ── */
+    #scanlines {
+      position: fixed; inset: 0; z-index: 1;
+      pointer-events: none;
+      background: repeating-linear-gradient(
+        0deg,
+        transparent,
+        transparent 3px,
+        rgba(0,0,0,0.12) 3px,
+        rgba(0,0,0,0.12) 4px
+      );
+    }
+
+    /* ── Corner decorations ── */
+    .corner {
+      position: fixed; z-index: 3; width: 60px; height: 60px;
+      pointer-events: none;
+    }
+    .corner::before, .corner::after {
+      content: ''; position: absolute;
+      background: var(--cyan);
+      box-shadow: var(--glow);
+    }
+    .corner::before { width: 2px; height: 40px; }
+    .corner::after  { width: 40px; height: 2px; }
+    .corner.tl { top: 18px; left: 18px; }
+    .corner.tr { top: 18px; right: 18px; transform: scaleX(-1); }
+    .corner.bl { bottom: 18px; left: 18px; transform: scaleY(-1); }
+    .corner.br { bottom: 18px; right: 18px; transform: scale(-1); }
+
+    /* ── Status bar top ── */
+    #statusbar {
+      position: fixed; top: 0; left: 0; right: 0;
+      height: 36px; z-index: 4;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0 80px;
+      background: rgba(0,8,20,0.75);
+      border-bottom: 1px solid var(--border);
+    }
+    #statusbar .label {
+      font-family: 'Orbitron', sans-serif;
+      font-size: 11px; letter-spacing: 3px;
+      color: var(--cyan);
+      text-transform: uppercase;
+    }
+    #status-dot {
+      display: inline-block; width: 8px; height: 8px;
+      border-radius: 50%; background: var(--orange);
+      margin-right: 8px;
+      box-shadow: var(--oglow);
+      animation: pulse-dot 2s infinite;
+    }
+    #status-dot.online { background: #00e676; box-shadow: 0 0 12px rgba(0,230,118,0.7); }
+    @keyframes pulse-dot { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+    #clock {
+      font-family: 'Orbitron', sans-serif; font-size: 12px;
+      letter-spacing: 2px; color: rgba(0,229,255,0.7);
+    }
+
+    /* ── Side panels ── */
+    .sidepanel {
+      position: fixed; top: 60px; z-index: 3;
+      width: 200px;
+      display: flex; flex-direction: column; gap: 10px;
+      padding: 0 12px;
+    }
+    .sidepanel.left  { left: 10px; }
+    .sidepanel.right { right: 10px; align-items: flex-end; }
+
+    .metric-card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 8px 12px;
+      font-size: 10px;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+    }
+    .metric-card .val {
+      font-family: 'Orbitron', sans-serif;
+      font-size: 20px; font-weight: 700;
+      color: var(--cyan);
+      display: block;
+      text-shadow: var(--glow);
+    }
+    .metric-card .lbl { color: rgba(0,229,255,0.5); font-size: 9px; }
+
+    /* Progress bar */
+    .prog-bar {
+      height: 4px; background: rgba(0,229,255,0.12);
+      border-radius: 2px; margin-top: 6px; overflow: hidden;
+    }
+    .prog-bar-fill {
+      height: 100%; border-radius: 2px;
+      background: linear-gradient(90deg, #0091ea, var(--cyan));
+      box-shadow: 0 0 8px var(--cyan);
+      transition: width 1s ease;
+    }
+
+    /* ── MAIN HUD ── */
+    #hud {
+      position: fixed;
+      top: 50px; bottom: 0; left: 220px; right: 220px;
+      z-index: 4;
+      display: flex; flex-direction: column;
+      align-items: center;
+      padding: 12px 0 0;
+    }
+
+    /* Title arc */
+    #hud-title {
+      font-family: 'Orbitron', sans-serif;
+      font-size: 13px; letter-spacing: 6px;
+      color: rgba(0,229,255,0.8);
+      text-transform: uppercase;
+      margin-bottom: 6px;
+      text-shadow: var(--glow);
+    }
+
+    /* Chat window */
+    #chat-window {
+      flex: 1;
+      width: 100%; max-width: 860px;
+      overflow-y: auto;
+      padding: 16px;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-bottom: none;
+      border-radius: 8px 8px 0 0;
+      scrollbar-width: thin;
+      scrollbar-color: var(--cyan) transparent;
+    }
+    #chat-window::-webkit-scrollbar { width: 4px; }
+    #chat-window::-webkit-scrollbar-thumb { background: var(--cyan); border-radius: 2px; }
+
+    /* Messages */
+    .msg {
+      display: flex; flex-direction: column;
+      margin-bottom: 16px; animation: fadein 0.4s ease;
+    }
+    @keyframes fadein { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; } }
+
+    .msg-label {
+      font-size: 9px; letter-spacing: 2px;
+      text-transform: uppercase; margin-bottom: 4px;
+      color: rgba(0,229,255,0.45);
+    }
+    .msg.user .msg-label { color: rgba(255,109,0,0.65); }
+
+    .msg-bubble {
+      display: inline-block; max-width: 90%;
+      padding: 10px 14px;
+      border-radius: 4px;
+      font-size: 13px; line-height: 1.6;
+      white-space: pre-wrap; word-break: break-word;
+    }
+    .msg.user .msg-bubble {
+      background: rgba(255,109,0,0.1);
+      border: 1px solid rgba(255,109,0,0.4);
+      color: #ffcc80;
+      align-self: flex-end;
+    }
+    .msg.ai .msg-bubble {
+      background: rgba(0,229,255,0.06);
+      border: 1px solid var(--border);
+      color: rgba(255,255,255,0.9);
+    }
+
+    /* Thinking indicator */
+    .thinking-indicator {
+      display: flex; gap: 5px; align-items: center;
+      padding: 10px 14px;
+      background: rgba(0,229,255,0.06);
+      border: 1px solid var(--border);
+      border-radius: 4px; width: fit-content;
+    }
+    .thinking-indicator span {
+      width: 6px; height: 6px; border-radius: 50%;
+      background: var(--cyan); display: inline-block;
+      animation: bounce 1.2s infinite;
+      box-shadow: 0 0 6px var(--cyan);
+    }
+    .thinking-indicator span:nth-child(2) { animation-delay: 0.2s; }
+    .thinking-indicator span:nth-child(3) { animation-delay: 0.4s; }
+    @keyframes bounce { 0%,100%{ transform: translateY(0); opacity: 0.4; } 50%{ transform: translateY(-6px); opacity: 1; } }
+
+    /* ── Input strip ── */
+    #input-strip {
+      width: 100%; max-width: 860px;
+      display: flex; gap: 0;
+      background: rgba(0,8,20,0.92);
+      border: 1px solid var(--border);
+      border-top: none;
+      border-radius: 0 0 8px 8px;
+      overflow: hidden;
+      box-shadow: var(--glow);
+    }
+    #input-strip textarea {
+      flex: 1; resize: none;
+      background: transparent;
+      border: none; outline: none;
+      color: #e0f7fa;
+      font-family: 'Share Tech Mono', monospace;
+      font-size: 13px;
+      padding: 14px 16px;
+      line-height: 1.5;
+      height: 52px;
+      caret-color: var(--cyan);
+    }
+    #input-strip textarea::placeholder { color: rgba(0,229,255,0.25); }
+    #send-btn {
+      background: linear-gradient(135deg, rgba(0,100,150,0.6), rgba(0,180,220,0.25));
+      border: none; border-left: 1px solid var(--border);
+      color: var(--cyan); cursor: pointer;
+      font-family: 'Orbitron', sans-serif; font-size: 10px;
+      letter-spacing: 2px; padding: 0 20px;
+      text-transform: uppercase;
+      transition: background 0.2s, box-shadow 0.2s;
+    }
+    #send-btn:hover:not(:disabled) {
+      background: rgba(0,229,255,0.2);
+      box-shadow: inset 0 0 20px rgba(0,229,255,0.2);
+    }
+    #send-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    #hint-bar {
+      width: 100%; max-width: 860px; text-align: center;
+      font-size: 9px; letter-spacing: 1px; color: rgba(0,229,255,0.25);
+      padding: 6px 0 10px;
+    }
+
+    /* ── Radar arc rings (SVG overlay) ── */
+    #radar-svg {
+      position: fixed; bottom: -180px; left: 50%;
+      transform: translateX(-50%);
+      width: 600px; height: 360px;
+      z-index: 2; pointer-events: none;
+      opacity: 0.18;
+    }
+
+    /* ── Alert toast ── */
+    #toast {
+      position: fixed; bottom: 90px; left: 50%; transform: translateX(-50%);
+      background: rgba(255,50,50,0.15); border: 1px solid rgba(255,80,80,0.5);
+      color: #ff8a80; font-size: 11px; letter-spacing: 1px;
+      padding: 8px 20px; border-radius: 4px;
+      z-index: 10; display: none;
+      animation: fadein 0.3s ease;
+    }
+  </style>
+</head>
+<body>
+
+<!-- Three.js background canvas -->
+<canvas id="bg-canvas"></canvas>
+
+<!-- Scanline CRT effect -->
+<div id="scanlines"></div>
+
+<!-- Corner brackets -->
+<div class="corner tl"></div>
+<div class="corner tr"></div>
+<div class="corner bl"></div>
+<div class="corner br"></div>
+
+<!-- Status bar -->
+<div id="statusbar">
+  <div class="label">
+    <span id="status-dot"></span>
+    <span id="status-text">CONNECTING…</span>
+  </div>
+  <div class="label">REALTIMEX ◈ KERNEL INTERFACE v1.0</div>
+  <div id="clock">--:--:--</div>
+</div>
+
+<!-- Left side metrics -->
+<div class="sidepanel left">
+  <div class="metric-card">
+    <span class="lbl">TASKS SENT</span>
+    <span class="val" id="m-tasks">0</span>
+  </div>
+  <div class="metric-card">
+    <span class="lbl">LATENCY</span>
+    <span class="val" id="m-latency">—</span>
+    <span class="lbl">ms avg</span>
+  </div>
+  <div class="metric-card">
+    <span class="lbl">SESSION</span>
+    <span class="val" id="m-session">—</span>
+    <span class="lbl">ACTIVE</span>
+  </div>
+  <div class="metric-card">
+    <span class="lbl">CONTEXT</span>
+    <div class="prog-bar"><div class="prog-bar-fill" id="m-ctx" style="width:0%"></div></div>
+    <span class="lbl" id="m-ctx-lbl">0 msgs</span>
+  </div>
+</div>
+
+<!-- Right side metrics -->
+<div class="sidepanel right">
+  <div class="metric-card" style="text-align:right">
+    <span class="lbl">REST API</span>
+    <span class="val" id="m-rest">8000</span>
+    <span class="lbl">PORT</span>
+  </div>
+  <div class="metric-card" style="text-align:right">
+    <span class="lbl">MODEL</span>
+    <span class="val" style="font-size:11px;letter-spacing:0">GPT-OSS</span>
+    <span class="lbl">GROQ BACKEND</span>
+  </div>
+  <div class="metric-card" style="text-align:right">
+    <span class="lbl">UPTIME</span>
+    <span class="val" id="m-uptime">00:00</span>
+  </div>
+  <div class="metric-card" style="text-align:right">
+    <span class="lbl">SUCCESS RATE</span>
+    <span class="val" id="m-success">—</span>
+    <span class="lbl">% TASKS OK</span>
+  </div>
+</div>
+
+<!-- Radar arc SVG -->
+<svg id="radar-svg" viewBox="0 0 600 360">
+  <defs>
+    <filter id="glow-f">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <g fill="none" stroke="#00e5ff" stroke-width="1.5" filter="url(#glow-f)">
+    <ellipse cx="300" cy="360" rx="80"  ry="40"/>
+    <ellipse cx="300" cy="360" rx="150" ry="75"/>
+    <ellipse cx="300" cy="360" rx="230" ry="115"/>
+    <ellipse cx="300" cy="360" rx="300" ry="150"/>
+  </g>
+  <line x1="300" y1="360" x2="300" y2="0" stroke="#00e5ff" stroke-width="0.5" opacity="0.4"/>
+  <line x1="300" y1="360" x2="0"   y2="130" stroke="#00e5ff" stroke-width="0.5" opacity="0.4"/>
+  <line x1="300" y1="360" x2="600" y2="130" stroke="#00e5ff" stroke-width="0.5" opacity="0.4"/>
+</svg>
+
+<!-- Main HUD -->
+<div id="hud">
+  <div id="hud-title">◈ AI KERNEL — TASK INTERFACE ◈</div>
+
+  <div id="chat-window">
+    <!-- Boot message -->
+    <div class="msg ai">
+      <div class="msg-label">REALTIMEX KERNEL</div>
+      <div class="msg-bubble">System online. Groq backend active. Enter a task or question — I am ready.</div>
+    </div>
+  </div>
+
+  <div id="input-strip">
+    <textarea id="user-input" placeholder="→ Enter task or question for the AI kernel…" rows="1"></textarea>
+    <button id="send-btn">SEND ▶</button>
+  </div>
+  <div id="hint-bar">ENTER to send &nbsp;·&nbsp; SHIFT+ENTER for newline &nbsp;·&nbsp; REST API → localhost:8000</div>
+</div>
+
+<div id="toast"></div>
+
+<!-- Three.js -->
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.165.0/build/three.module.js"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+
+/* ═══════════════════════════════════════════
+   THREE.JS SCENE — Holographic Globe + Particles
+═══════════════════════════════════════════ */
+const canvas  = document.getElementById('bg-canvas');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+
+const scene  = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 200);
+camera.position.set(0, 0, 28);
+
+/* --- Ambient + directional light --- */
+scene.add(new THREE.AmbientLight(0x001a33, 2.5));
+const dlight = new THREE.DirectionalLight(0x00e5ff, 1.5);
+dlight.position.set(10, 20, 15);
+scene.add(dlight);
+
+/* --- Globe wireframe --- */
+const globeGeo  = new THREE.SphereGeometry(7, 32, 20);
+const globeMat  = new THREE.MeshBasicMaterial({
+  color: 0x00e5ff, wireframe: true, transparent: true, opacity: 0.12
+});
+const globe = new THREE.Mesh(globeGeo, globeMat);
+globe.position.set(-12, 2, -8);
+scene.add(globe);
+
+/* Solid inner glow sphere */
+const innerGeo = new THREE.SphereGeometry(6.5, 32, 20);
+const innerMat = new THREE.MeshStandardMaterial({
+  color: 0x001a33, emissive: 0x003366, emissiveIntensity: 0.5,
+  transparent: true, opacity: 0.6
+});
+scene.add(new THREE.Mesh(innerGeo, innerMat));
+scene.children[scene.children.length-1].position.copy(globe.position);
+
+/* Equator ring */
+const ringGeo = new THREE.TorusGeometry(7.2, 0.04, 8, 100);
+const ringMat = new THREE.MeshBasicMaterial({ color: 0x00e5ff, transparent: true, opacity: 0.4 });
+const ring = new THREE.Mesh(ringGeo, ringMat);
+ring.position.copy(globe.position);
+ring.rotation.x = Math.PI / 2;
+scene.add(ring);
+
+/* Tilted orbit ring */
+const ring2 = ring.clone();
+ring2.rotation.x = 1.1; ring2.rotation.y = 0.5;
+scene.add(ring2);
+
+/* --- Particle field --- */
+const particleCount = 2000;
+const positions = new Float32Array(particleCount * 3);
+for (let i = 0; i < particleCount; i++) {
+  positions[i*3]   = (Math.random() - 0.5) * 120;
+  positions[i*3+1] = (Math.random() - 0.5) * 80;
+  positions[i*3+2] = (Math.random() - 0.5) * 80 - 20;
+}
+const pGeo = new THREE.BufferGeometry();
+pGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+const pMat = new THREE.PointsMaterial({
+  color: 0x00e5ff, size: 0.12, transparent: true, opacity: 0.55
+});
+scene.add(new THREE.Points(pGeo, pMat));
+
+/* --- Hex grid plane (floor) --- */
+const hexGeo = new THREE.PlaneGeometry(80, 60, 25, 18);
+const hexMat = new THREE.MeshBasicMaterial({
+  color: 0x00e5ff, wireframe: true, transparent: true, opacity: 0.04
+});
+const hexPlane = new THREE.Mesh(hexGeo, hexMat);
+hexPlane.rotation.x = -Math.PI / 2.5;
+hexPlane.position.set(0, -14, -12);
+scene.add(hexPlane);
+
+/* --- Radar sweep line (right side) --- */
+const sweepGroup = new THREE.Group();
+sweepGroup.position.set(12, -2, -5);
+scene.add(sweepGroup);
+
+const sweepGeo = new THREE.BufferGeometry().setFromPoints([
+  new THREE.Vector3(0,0,0), new THREE.Vector3(0,5,0)
+]);
+const sweepMat = new THREE.LineBasicMaterial({ color: 0xff6d00, transparent: true, opacity: 0.6 });
+const sweepLine = new THREE.Line(sweepGeo, sweepMat);
+sweepGroup.add(sweepLine);
+
+/* sweep circle */
+const sweepCircleGeo = new THREE.RingGeometry(4.9, 5, 64);
+const sweepCircleMat = new THREE.MeshBasicMaterial({ color: 0x00e5ff, side: THREE.DoubleSide, transparent: true, opacity: 0.15 });
+sweepGroup.add(new THREE.Mesh(sweepCircleGeo, sweepCircleMat));
+
+/* --- Floating data nodes --- */
+const nodeGroup = new THREE.Group();
+scene.add(nodeGroup);
+for (let i = 0; i < 12; i++) {
+  const nGeo = new THREE.OctahedronGeometry(0.2 + Math.random() * 0.25, 0);
+  const nMat = new THREE.MeshBasicMaterial({ color: i % 3 === 0 ? 0xff6d00 : 0x00e5ff, wireframe: true });
+  const node = new THREE.Mesh(nGeo, nMat);
+  node.position.set(
+    (Math.random() - 0.5) * 40,
+    (Math.random() - 0.5) * 22,
+    (Math.random() - 0.5) * 10 - 8
+  );
+  node.userData.speed = { x: (Math.random()-0.5)*0.005, y: (Math.random()-0.5)*0.007 };
+  nodeGroup.add(node);
+}
+
+/* ── Animate ── */
+const clock = new THREE.Clock();
+function animate() {
+  requestAnimationFrame(animate);
+  const t = clock.getElapsedTime();
+
+  globe.rotation.y = t * 0.09;
+  ring.rotation.z  = t * 0.06;
+  ring2.rotation.z = -t * 0.04;
+
+  sweepLine.rotation.z = t * 1.2;
+
+  nodeGroup.children.forEach(n => {
+    n.position.x += n.userData.speed.x;
+    n.position.y += n.userData.speed.y;
+    if (Math.abs(n.position.x) > 22) n.userData.speed.x *= -1;
+    if (Math.abs(n.position.y) > 13) n.userData.speed.y *= -1;
+    n.rotation.x += 0.01; n.rotation.y += 0.013;
+  });
+
+  camera.position.x = Math.sin(t * 0.05) * 1.5;
+  camera.position.y = Math.cos(t * 0.04) * 0.8;
+  camera.lookAt(0, 0, 0);
+
+  renderer.render(scene, camera);
+}
+animate();
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+/* ═══════════════════════════════════════════
+   UI LOGIC — Clock, Health, Chat
+═══════════════════════════════════════════ */
+const API_BASE   = 'http://localhost:8000';
+const SESSION_ID = crypto.randomUUID();
+
+/* Clock */
+function updateClock() {
+  const now = new Date();
+  document.getElementById('clock').textContent =
+    now.toLocaleTimeString('en-US', { hour12: false });
+}
+setInterval(updateClock, 1000);
+updateClock();
+
+/* Uptime counter */
+const startTime = Date.now();
+setInterval(() => {
+  const s = Math.floor((Date.now() - startTime) / 1000);
+  const m = Math.floor(s / 60).toString().padStart(2, '0');
+  const ss = (s % 60).toString().padStart(2, '0');
+  document.getElementById('m-uptime').textContent = `${m}:${ss}`;
+}, 1000);
+
+/* Session ID short display */
+document.getElementById('m-session').textContent = SESSION_ID.slice(0, 6).toUpperCase();
+
+/* Health check */
+let tasksSent = 0, tasksOk = 0;
+let totalLatency = 0, latencyCount = 0;
+
+async function healthCheck() {
+  try {
+    const r = await fetch(`${API_BASE}/health`, { signal: AbortSignal.timeout(3000) });
+    if (r.ok) {
+      document.getElementById('status-dot').className = 'online';
+      document.getElementById('status-text').textContent = 'KERNEL ONLINE';
+    } else {
+      setOffline();
+    }
+  } catch {
+    setOffline();
+  }
+  // Also fetch metrics
+  try {
+    const r = await fetch(`${API_BASE}/metrics`, { signal: AbortSignal.timeout(3000) });
+    if (r.ok) {
+      const d = await r.json();
+      const rate = d.total_requests > 0
+        ? Math.round(d.successful_requests / d.total_requests * 100) : 0;
+      document.getElementById('m-success').textContent = rate;
+    }
+  } catch {}
+}
+
+function setOffline() {
+  document.getElementById('status-dot').className = '';
+  document.getElementById('status-text').textContent = 'KERNEL OFFLINE — START: python3 main.py';
+}
+
+healthCheck();
+setInterval(healthCheck, 8000);
+
+/* Toast helper */
+function showToast(msg, ms = 4000) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.style.display = 'block';
+  setTimeout(() => { t.style.display = 'none'; }, ms);
+}
+
+/* Chat helpers */
+const chatWindow = document.getElementById('chat-window');
+
+function appendMsg(role, text) {
+  const div = document.createElement('div');
+  div.className = `msg ${role}`;
+  const lbl = document.createElement('div');
+  lbl.className = 'msg-label';
+  lbl.textContent = role === 'user' ? '◆ YOU' : '◈ REALTIMEX KERNEL';
+  const bubble = document.createElement('div');
+  bubble.className = 'msg-bubble';
+  bubble.textContent = text;
+  div.appendChild(lbl);
+  div.appendChild(bubble);
+  chatWindow.appendChild(div);
+  chatWindow.scrollTop = chatWindow.scrollHeight;
+  return bubble;
+}
+
+function appendThinking() {
+  const div = document.createElement('div');
+  div.className = 'msg ai';
+  const lbl = document.createElement('div');
+  lbl.className = 'msg-label';
+  lbl.textContent = '◈ REALTIMEX KERNEL';
+  div.appendChild(lbl);
+  const ind = document.createElement('div');
+  ind.className = 'thinking-indicator';
+  ind.innerHTML = '<span></span><span></span><span></span>';
+  div.appendChild(ind);
+  chatWindow.appendChild(div);
+  chatWindow.scrollTop = chatWindow.scrollHeight;
+  return div;
+}
+
+function updateContextBar(count) {
+  const pct = Math.min(count / 30 * 100, 100);
+  document.getElementById('m-ctx').style.width = pct + '%';
+  document.getElementById('m-ctx-lbl').textContent = `${count} msgs`;
+}
+
+/* Extract readable response from API payload */
+function extractResponse(data) {
+  // data may be {status, message, data:{...}, ...}
+  if (typeof data === 'string') return data;
+  if (data.message && typeof data.message === 'string' && data.message.length > 4) return data.message;
+  const inner = data.data || data.result || data.output || data.content || data.response || data.summary;
+  if (typeof inner === 'string' && inner.length > 0) return inner;
+  if (inner && typeof inner === 'object') {
+    for (const k of ['message','content','response','output','summary','text','result']) {
+      if (inner[k] && typeof inner[k] === 'string') return inner[k];
+    }
+    return JSON.stringify(inner, null, 2);
+  }
+  return JSON.stringify(data, null, 2);
+}
+
+/* Send task */
+let msgCount = 0;
+const sendBtn  = document.getElementById('send-btn');
+const inputEl  = document.getElementById('user-input');
+
+async function sendTask() {
+  const goal = inputEl.value.trim();
+  if (!goal) return;
+  inputEl.value = '';
+  inputEl.style.height = '52px';
+
+  // User message
+  appendMsg('user', goal);
+  msgCount++;
+  updateContextBar(msgCount);
+  tasksSent++;
+  document.getElementById('m-tasks').textContent = tasksSent;
+
+  // Thinking indicator
+  const thinkDiv = appendThinking();
+  sendBtn.disabled = true;
+
+  const t0 = Date.now();
+  try {
+    const resp = await fetch(`${API_BASE}/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ goal, session_id: SESSION_ID }),
+      signal: AbortSignal.timeout(60000) // 60s timeout
+    });
+
+    const latency = Date.now() - t0;
+    totalLatency += latency; latencyCount++;
+    document.getElementById('m-latency').textContent = Math.round(totalLatency / latencyCount);
+
+    thinkDiv.remove();
+
+    if (resp.status === 202) {
+      const j = await resp.json();
+      const taskId = j.task_id || j.request_id;
+      let finished = false;
+      for (let i = 0; i < 30; i++) {
+        await new Promise(r => setTimeout(r, 1000));
+        try {
+          const pollResp = await fetch(`${API_BASE}/tasks/${taskId}`);
+          if (pollResp.ok) {
+            const pollData = await pollResp.json();
+            const state = (pollData.data && pollData.data.state) || pollData.status;
+            if (state === 'completed' || state === 'success') {
+              finished = true;
+              const text = extractResponse(pollData);
+              appendMsg('ai', text);
+              tasksOk++;
+              break;
+            } else if (state === 'failed' || state === 'error') {
+              finished = true;
+              appendMsg('ai', `Task failed: ${pollData.message || 'Error executing task'}`);
+              break;
+            }
+          }
+        } catch {}
+      }
+      if (!finished) {
+        appendMsg('ai', `Task ${taskId.slice(0, 8)} is processing in the background. Check CLI.`);
+      }
+    } else {
+      const j = await resp.json();
+      const text = extractResponse(j);
+      appendMsg('ai', text);
+      tasksOk++;
+    }
+    msgCount++;
+    updateContextBar(msgCount);
+
+  } catch (err) {
+    thinkDiv.remove();
+    if (err.name === 'TimeoutError') {
+      appendMsg('ai', '⚠ Request timed out (60s). The kernel may be processing — check CLI output.');
+    } else {
+      showToast(`⚠ Connection error: ${err.message}`);
+      appendMsg('ai', `⚠ Could not reach kernel. Ensure "python3 main.py" is running.\nError: ${err.message}`);
+    }
+  }
+  sendBtn.disabled = false;
+  inputEl.focus();
+}
+
+/* Send on Enter (not Shift+Enter) */
+inputEl.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    sendTask();
+  }
+});
+sendBtn.addEventListener('click', sendTask);
+
+/* Auto-resize textarea */
+inputEl.addEventListener('input', () => {
+  inputEl.style.height = 'auto';
+  inputEl.style.height = Math.min(inputEl.scrollHeight, 140) + 'px';
+});
+
+inputEl.focus();
+</script>
+</body>
+</html>

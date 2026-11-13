@@ -23,6 +23,7 @@ but kept for import-path compatibility during the transition.
 
 from __future__ import annotations
 
+import concurrent.futures
 import logging
 import queue
 import threading
@@ -154,6 +155,11 @@ class EventBus:
         self._legacy_history: list[Event] = []
         self._legacy_history_lock = threading.Lock()
 
+        # Async subscriber executor pool for non-blocking I/O dispatching
+        self._async_executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=8, thread_name_prefix="EventBus-AsyncWorker"
+        )
+
         # Dispatcher thread management
         self._running = False
         self._shutdown_event = threading.Event()
@@ -203,6 +209,9 @@ class EventBus:
                     "Event Bus dispatcher did not stop within %.1fs.", timeout
                 )
             self._dispatcher_thread = None
+
+        if hasattr(self, "_async_executor") and self._async_executor is not None:
+            self._async_executor.shutdown(wait=False, cancel_futures=True)
 
         self._logger.info("Event Bus shut down.")
 
@@ -278,7 +287,11 @@ class EventBus:
     # ------------------------------------------------------------------
 
     def subscribe(
-        self, event_name: str, listener: EventHandler
+        self,
+        event_name: str,
+        listener: EventHandler,
+        *,
+        async_dispatch: bool = False,
     ) -> Subscriber:
         """
         Register a listener for a specific event type name.
@@ -289,6 +302,7 @@ class EventBus:
             event_name: The event type name to listen for (e.g.
                 ``"KernelReady"``).
             listener: A callable that accepts an ``Event`` instance.
+            async_dispatch: Whether to execute this listener on the async worker pool.
 
         Returns:
             The created ``Subscriber`` object.
@@ -298,6 +312,7 @@ class EventBus:
             handler=listener,
             filter=event_filter,
             source_name="",
+            async_dispatch=async_dispatch,
         )
 
     def subscribe_with_filter(
@@ -305,6 +320,8 @@ class EventBus:
         handler: EventHandler,
         event_filter: EventFilter,
         source_name: str = "",
+        *,
+        async_dispatch: bool = False,
     ) -> Subscriber:
         """
         Register a subscriber with a rich event filter.
@@ -315,6 +332,7 @@ class EventBus:
                 this subscriber should receive.
             source_name: Human-readable name of the subscribing
                 component (e.g. ``"TaskManager"``).
+            async_dispatch: Whether to execute this listener on the async worker pool.
 
         Returns:
             The created ``Subscriber`` object.
@@ -323,6 +341,7 @@ class EventBus:
             handler=handler,
             filter=event_filter,
             source_name=source_name,
+            async_dispatch=async_dispatch,
         )
 
     def unsubscribe(self, listener: EventHandler) -> int:
@@ -399,20 +418,31 @@ class EventBus:
         """
         Deliver an event to every matching subscriber.
 
-        Exceptions thrown by a subscriber are caught and logged so that
-        one broken subscriber never blocks delivery to the rest.
+        Subscribers configured with async_dispatch=True are executed
+        concurrently via the ThreadPoolExecutor so slow/blocking I/O handlers
+        never block the dispatcher loop or delay other subscribers.
         """
         subscribers = self._subscriber_registry.get_matching_subscribers(event)
         for subscriber in subscribers:
-            try:
-                subscriber.deliver(event)
-            except Exception:
-                self._logger.exception(
-                    "Subscriber %r (%s) raised an exception while handling event %s.",
-                    subscriber.subscriber_id,
-                    subscriber.source_name,
-                    event.name,
-                )
+            if subscriber.async_dispatch:
+                try:
+                    self._async_executor.submit(self._safe_deliver, subscriber, event)
+                except Exception:
+                    self._safe_deliver(subscriber, event)
+            else:
+                self._safe_deliver(subscriber, event)
+
+    def _safe_deliver(self, subscriber: Subscriber, event: Event) -> None:
+        """Safely invoke subscriber delivery and log any unhandled exceptions."""
+        try:
+            subscriber.deliver(event)
+        except Exception:
+            self._logger.exception(
+                "Subscriber %r (%s) raised an exception while handling event %s.",
+                subscriber.subscriber_id,
+                subscriber.source_name,
+                event.name,
+            )
 
     # ------------------------------------------------------------------
     # Query helpers

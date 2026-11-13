@@ -243,6 +243,10 @@ class KernelAPI:
     def dependency_container(self) -> Any:
         return self._kernel.dependency_container
 
+    @property
+    def service_registry(self) -> Any:
+        return self._kernel.service_registry
+
 
     @property
     def observability(self) -> Any:

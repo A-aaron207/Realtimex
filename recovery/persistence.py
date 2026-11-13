@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -124,6 +125,23 @@ class RecoveryPersistence:
             except Exception as e:
                 raise CheckpointError(f"Failed to delete checkpoint '{checkpoint_id}': {e}") from e
 
+    @staticmethod
+    def _natural_key(s: str) -> list[int | str]:
+        return [int(t) if t.isdigit() else t.lower() for t in re.split(r"(\d+)", s)]
+
+    def _file_sort_key(self, f: Path) -> tuple[int, Any, list[int | str]]:
+        try:
+            with open(f, "r", encoding="utf-8") as fp:
+                data = json.load(fp)
+                if isinstance(data, dict) and "timestamp" in data:
+                    return (0, data["timestamp"], self._natural_key(f.name))
+        except Exception:
+            pass
+        try:
+            return (1, f.stat().st_mtime_ns, self._natural_key(f.name))
+        except Exception:
+            return (2, 0, self._natural_key(f.name))
+
     def list_checkpoints(self) -> list[str]:
         """
         List all checkpoint IDs sorted by modification time (oldest first).
@@ -139,7 +157,7 @@ class RecoveryPersistence:
             return []
         try:
             files = list(cp_dir.glob("*.json"))
-            files.sort(key=os.path.getmtime)
+            files.sort(key=self._file_sort_key)
             return [f.stem for f in files]
         except Exception as e:
             raise CheckpointError(f"Failed to list checkpoints: {e}") from e
@@ -218,7 +236,7 @@ class RecoveryPersistence:
             return []
         try:
             files = list(sn_dir.glob("*.json"))
-            files.sort(key=os.path.getmtime)
+            files.sort(key=self._file_sort_key)
             return [f.stem for f in files]
         except Exception as e:
             raise SnapshotError(f"Failed to list snapshots: {e}") from e

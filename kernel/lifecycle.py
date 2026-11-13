@@ -9,6 +9,7 @@ or reason about the Kernel's current phase.
 
 from __future__ import annotations
 
+import threading
 from enum import Enum
 
 
@@ -72,11 +73,13 @@ class LifecycleManager:
             initial_state: The state the Kernel begins in. Defaults to OFFLINE.
         """
         self._state = initial_state
+        self._lock = threading.RLock()
 
     @property
     def state(self) -> KernelState:
         """The Kernel's current lifecycle state."""
-        return self._state
+        with self._lock:
+            return self._state
 
     def transition_to(self, new_state: KernelState) -> None:
         """
@@ -89,7 +92,9 @@ class LifecycleManager:
             InvalidStateTransition: If the transition is not permitted
                 from the current state.
         """
-        allowed = self._ALLOWED_TRANSITIONS.get(self._state, ())
-        if new_state not in allowed:
-            raise InvalidStateTransition(current=self._state, attempted=new_state)
-        self._state = new_state
+        with self._lock:
+            allowed = self._ALLOWED_TRANSITIONS.get(self._state, ())
+            if new_state not in allowed:
+                raise InvalidStateTransition(current=self._state, attempted=new_state)
+            self._state = new_state
+

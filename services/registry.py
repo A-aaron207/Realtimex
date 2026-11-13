@@ -11,9 +11,15 @@ name.
 
 from __future__ import annotations
 
+import contextvars
 import threading
+from contextlib import contextmanager
 
 from services.base import BaseService
+
+_current_registry: contextvars.ContextVar[ServiceRegistry | None] = contextvars.ContextVar(
+    "current_service_registry", default=None
+)
 
 
 class DuplicateServiceError(Exception):
@@ -45,21 +51,51 @@ class ServiceRegistry:
     This class contains no business logic about what a service does;
     it is purely a lookup table guarded by a lock so it can safely be
     shared across the Kernel and any concurrently loading modules.
+    Supports context-local isolation so multiple Kernel instances
+    can run in the same process without global singleton collisions.
     """
 
     _instance: ServiceRegistry | None = None
 
     @classmethod
     def get_instance(cls) -> ServiceRegistry:
-        """Get the global ServiceRegistry instance."""
-        if cls._instance is None:
-            raise RuntimeError("ServiceRegistry has not been initialized.")
-        return cls._instance
+        """
+        Get the active ServiceRegistry instance.
+        Prioritizes the context-local instance if set, falling back to the singleton instance.
+        """
+        ctx_instance = _current_registry.get()
+        if ctx_instance is not None:
+            return ctx_instance
+        if cls._instance is not None:
+            return cls._instance
+        raise RuntimeError("ServiceRegistry has not been initialized.")
 
-    def __init__(self) -> None:
+    @classmethod
+    def set_current(cls, instance: ServiceRegistry | None) -> None:
+        """Set the current context-local ServiceRegistry instance."""
+        _current_registry.set(instance)
+
+    @classmethod
+    def reset(cls) -> None:
+        """Reset both global singleton and context-local instances."""
+        cls._instance = None
+        _current_registry.set(None)
+
+    @contextmanager
+    def as_current(self):
+        """Context manager to scope this ServiceRegistry instance to the current context."""
+        token = _current_registry.set(self)
+        try:
+            yield self
+        finally:
+            _current_registry.reset(token)
+
+    def __init__(self, set_as_current: bool = True) -> None:
         """Initialize an empty, thread-safe service registry."""
         self._services: dict[str, BaseService] = {}
         self._lock = threading.RLock()
+        if set_as_current:
+            _current_registry.set(self)
 
     def register(self, service: BaseService) -> None:
         """

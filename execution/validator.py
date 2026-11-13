@@ -63,24 +63,35 @@ class ExecutionResultValidator:
                         repair_strategy="create_parent_directory",
                     )
 
-        elif cap == "run_command":
+        elif cap in ("run_command", "execute_snippet", "execute_script"):
             exit_code = observation.exit_code
             if exit_code is not None and exit_code != 0:
+                err_text = observation.error or ""
+                strategy = self._determine_repair_strategy(cap, err_text, input_data) or "retry_command"
                 return ExecutionValidationResult(
                     is_valid=False,
-                    reason=f"Command exited with non-zero status code: {exit_code}",
+                    reason=f"Command exited with non-zero status code: {exit_code}. Output: {err_text}",
                     requires_repair=True,
-                    repair_strategy="retry_command",
+                    repair_strategy=strategy,
                 )
 
         return ExecutionValidationResult(is_valid=True)
 
     def _determine_repair_strategy(self, capability: str, error_msg: str, input_data: dict[str, Any]) -> str | None:
-        """Categorize error message into a deterministic repair strategy."""
+        """Categorize error message into a deterministic or LLM repair strategy."""
         err_lower = error_msg.lower()
+
+        if any(term in err_lower for term in [
+            "traceback", "syntaxerror", "zerodivisionerror", "nameerror",
+            "attributeerror", "typeerror", "modulenotfounderror", "importerror",
+            "indexerror", "keyerror", "valueerror", "assertionerror"
+        ]):
+            return "llm_code_repair"
 
         if "no such file or directory" in err_lower or "directory missing" in err_lower or "filenotfound" in err_lower:
             return "create_parent_directory"
+        if "no file path provided" in err_lower or "no path provided" in err_lower:
+            return "resolve_missing_file_path"
         if "permission denied" in err_lower or "permissionerror" in err_lower:
             return "use_fallback_directory"
         if "timeout" in err_lower or "timed out" in err_lower:
@@ -89,3 +100,4 @@ class ExecutionResultValidator:
             return "retry_network"
 
         return "retry_default"
+

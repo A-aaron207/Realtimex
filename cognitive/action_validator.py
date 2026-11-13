@@ -114,6 +114,23 @@ class ActionValidator:
                 if not path_res.is_valid:
                     return path_res
 
+        # 4b. Command safety validation
+        if capability in ("run_command", "execute_snippet", "execute_script"):
+            cmd = str(input_data.get("command", "")).strip()
+            dangerous_patterns = [
+                r"\bmv\s+(?:-[a-zA-Z]+\s+)*\*\s+",
+                r"\bmv\s+(?:-[a-zA-Z]+\s+)*\.\/\*\s+",
+                r"\bcp\s+(?:-[a-zA-Z]+\s+)*\*\s+",
+                r"\bcp\s+(?:-[a-zA-Z]+\s+)*\.\/\*\s+",
+            ]
+            for pat in dangerous_patterns:
+                if re.search(pat, cmd):
+                    return ValidationResult(
+                        is_valid=False,
+                        reason=f"Dangerous command '{cmd}' blocked: moving or copying entire workspace is prohibited.",
+                        should_replan=True,
+                    )
+
         # 5. Permission checks
         if granted_permissions is not None:
             required_perm = step.get("required_permission") or capability

@@ -5,9 +5,11 @@ Thread-safe Dispatch Queue for storing pending workflow steps.
 from __future__ import annotations
 
 import threading
+import time
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
+from events.event import Event
 from scheduler.exceptions import QueueError
 from scheduler.policies import QueueItem
 
@@ -163,7 +165,3 @@ class DispatchQueue:
         with self._lock:
             return list(self._items)
 
-
-# Import Event inside module helper to prevent cycle
-from events.event import Event
-import time

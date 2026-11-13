@@ -23,6 +23,7 @@ class Subscriber:
     source_name: str = ""
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     active: bool = True
+    async_dispatch: bool = False
     
     def should_receive(self, event: Event) -> bool:
         """Determine if the subscriber should receive the given event."""
@@ -39,7 +40,13 @@ class SubscriberRegistry:
         self._subscribers: dict[str, Subscriber] = {}
         self._lock = threading.RLock()
     
-    def register(self, handler: EventHandler, filter: EventFilter, source_name: str = "") -> Subscriber:
+    def register(
+        self,
+        handler: EventHandler,
+        filter: EventFilter,
+        source_name: str = "",
+        async_dispatch: bool = False,
+    ) -> Subscriber:
         """Register a new subscriber. Returns the Subscriber object."""
         with self._lock:
             subscriber_id = str(uuid.uuid4())
@@ -47,7 +54,8 @@ class SubscriberRegistry:
                 subscriber_id=subscriber_id,
                 handler=handler,
                 filter=filter,
-                source_name=source_name
+                source_name=source_name,
+                async_dispatch=async_dispatch,
             )
             self._subscribers[subscriber_id] = subscriber
             return subscriber

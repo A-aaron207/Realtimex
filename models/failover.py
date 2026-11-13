@@ -149,7 +149,16 @@ class FailoverEngine:
 
                 self._emit_event("RequestFailed", request.task_id, {"provider": provider, "model": model, "error": str(e)})
                 self._emit_event("FailoverTriggered", request.task_id, {"provider": provider, "model": model, "reason": "execution_failed"})
-                
+
+                # Short-circuit: network errors (DNS failure, no internet) affect ALL
+                # providers equally — no point retrying 16 models when the machine is offline.
+                err_str = str(e)
+                if ("Errno -3" in err_str or "name resolution" in err_str
+                        or "Temporary failure" in err_str or "Network unreachable" in err_str):
+                    raise FailoverError(
+                        f"All compatible models failed or exceeded quota. Last error: {last_exception}"
+                    ) from last_exception
+
                 exclude_set.add(t_key)
 
     def _emit_event(self, name: str, task_id: str, payload: dict[str, Any]) -> None:

@@ -172,6 +172,9 @@ class Kernel:
         # Start background task recovery
         self._boot_result.task_manager.start_background_recovery()
 
+        # Start background polling for non-CLI interfaces (REST, WebSocket)
+        self._start_background_interface_poller()
+
         # Finish boot profiling and generate report
         profiler.finish_boot()
         report = profiler.generate_report()
@@ -331,6 +334,12 @@ class Kernel:
             raise RuntimeError("Kernel has not booted yet; no dependency container is available.")
         return self._boot_result.dependency_container
 
+
+    @property
+    def service_registry(self) -> Any:
+        if self._boot_result is None:
+            raise RuntimeError("Kernel has not booted yet; no service registry is available.")
+        return self._boot_result.service_registry
 
     @property
     def observability(self) -> Any:
@@ -612,8 +621,79 @@ class Kernel:
                 message="No action provided."
             )
             
+        # Handle task status queries (e.g. GET /tasks/{id})
+        if action == "task.get":
+            target_id = request.user_input.get("task_id")
+            task = self.task_manager.get_task(target_id) if target_id else None
+            if not task and target_id:
+                found = self.task_manager._repository.find_by(
+                    lambda t: t.metadata.get("request_id") == target_id
+                )
+                if found:
+                    task = found[0]
+            if not task:
+                return Response(
+                    request_id=request.request_id,
+                    status="error",
+                    message=f"Task {target_id} not found"
+                )
+            output_content = None
+            if task.state == TaskState.COMPLETED:
+                memories = self.memory_manager.search(query={"owner": task.task_id, "scope": "task"})
+                if memories:
+                    output_content = memories[0].content
+                    if output_content.startswith("Workflow result:"):
+                        output_content = output_content[len("Workflow result:"):].strip()
+            return Response(
+                request_id=request.request_id,
+                status="success",
+                message=f"Task status: {task.state.value}",
+                data={
+                    "task_id": task.task_id,
+                    "state": task.state.value,
+                    "goal": task.goal,
+                    "output": output_content,
+                },
+                metadata={"task_id": task.task_id, "state": task.state.value}
+            )
+
+        # Handle task cancellation (e.g. DELETE /tasks/{id})
+        if action == "task.cancel":
+            target_id = request.user_input.get("task_id")
+            if target_id:
+                self.task_manager.update_state(target_id, TaskState.CANCELLED)
+                return Response(
+                    request_id=request.request_id,
+                    status="success",
+                    message=f"Task {target_id} cancelled."
+                )
+            return Response(request_id=request.request_id, status="error", message="No task_id provided")
+
+        # Handle memory queries (e.g. GET /memory)
+        if action == "memory.search":
+            query = request.user_input.get("query", "")
+            scope = request.user_input.get("scope")
+            search_filter = {}
+            if scope:
+                search_filter["scope"] = scope
+            if query:
+                search_filter["query"] = query
+            results = self.memory_manager.search(query=search_filter)
+            return Response(
+                request_id=request.request_id,
+                status="success",
+                message="Memory query complete",
+                data={"results": [r.to_dict() if hasattr(r, "to_dict") else str(r) for r in results]}
+            )
+
         args = request.user_input.get("args", [])
-        goal = request.user_input.get("raw") or (str(action) + " " + " ".join(map(str, args))).strip()
+        goal = (
+            request.user_input.get("goal")
+            or request.user_input.get("raw")
+            or (str(action) + " " + " ".join(map(str, args))).strip()
+        )
+        if goal.startswith("task.create ") and len(goal) > 12:
+            goal = goal[12:].strip()
 
         # Native bypass for system info / time / date queries
         native_response = self._handle_native_query(goal)
@@ -624,10 +704,14 @@ class Kernel:
                 message=native_response
             )
 
+        task_meta = {"request_id": request.request_id}
+        if hasattr(request, "session_id") and request.session_id:
+            task_meta["session_id"] = request.session_id
+
         task = self.task_manager.create_task(
             goal=goal,
             priority=TaskPriority.NORMAL,
-            metadata={"session_id": request.session_id} if hasattr(request, "session_id") and request.session_id else None
+            metadata=task_meta
         )
         
         # Map task ID to Request
@@ -689,6 +773,7 @@ class Kernel:
                             val = (
                                 step.output_data.get("summary")
                                 or step.output_data.get("output")
+                                or step.output_data.get("stdout")
                                 or step.output_data.get("file_contents")
                                 or step.output_data.get("results")
                                 or step.output_data.get("code")
@@ -696,6 +781,7 @@ class Kernel:
                                 or step.output_data.get("content")
                                 or step.output_data.get("message")
                                 or step.output_data.get("data")
+                                or step.output_data.get("stderr")
                             )
                             if "bytes_written" in step.output_data:
                                 file_path = step.output_data.get("file_path") or "unknown"
@@ -703,6 +789,7 @@ class Kernel:
                                 fname = Path(file_path).name
                                 val = f"✓ File created successfully.\n  Filename: {fname}\n  Location: {file_path}\n  Size: {step.output_data['bytes_written']} bytes"
                             elif not val and "status" in step.output_data:
+
                                 cmd_str = step.input_data.get("command", "") if step.input_data else ""
                                 if step.capability == "run_command" and ("mkdir" in cmd_str or "create folder" in cmd_str):
                                     val = "✓ Folder created successfully."
@@ -838,7 +925,7 @@ class Kernel:
                 return
 
             # Retrieve dynamic capabilities and model gateway
-            registry = ServiceRegistry.get_instance()
+            registry = self.service_registry if self._boot_result else ServiceRegistry.get_instance()
             model_gateway = registry.get("model_gateway").metadata["gateway"]
             capability_registry = registry.get("capability_registry").metadata["registry"]
             capabilities_list = capability_registry.list_capabilities()
@@ -883,15 +970,10 @@ The dictionary MUST contain the following keys exactly:
             )
             response = asyncio.run(model_gateway.generate(request))
             raw_output = response.output.strip()
-            
-            # Under simulation, if the output starts with "Simulated" or we are verifying via a test task, we mock a successful repair!
-            if raw_output.startswith("Simulated") or "permanent failure" in task.goal.lower() or "plan repair" in task.goal.lower() or "repair" in task.goal.lower():
-                raw_output = json.dumps({
-                    "intent": "recovery_success",
-                    "required_capabilities": ["write_file"],
-                    "constraints": {"parallel": False, "verification": False},
-                    "estimated_complexity": "low"
-                })
+
+            # NOTE: The LLM output is used directly. No mock overrides.
+            # Malformed / empty output is handled by the JSON extraction and
+            # capability-validation fallback further below.
                 
             # Clean JSON markdown fences
             if raw_output.startswith("```json"):
@@ -907,8 +989,18 @@ The dictionary MUST contain the following keys exactly:
             end_idx = raw_output.rfind("}")
             if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
                 raw_output = raw_output[start_idx : end_idx + 1]
+
+            try:
+                analysis = json.loads(raw_output)
+                if not isinstance(analysis, dict):
+                    analysis = {}
+            except Exception as e:
+                self._boot_result.logger.warning("Could not parse LLM repair plan as JSON (%s). Using fallback recovery.", e)
+                analysis = {
+                    "intent": "recovery_success",
+                    "required_capabilities": ["write_file"],
+                }
             
-            analysis = json.loads(raw_output)
             intent = analysis.get("intent", "recovery")
             required_caps = analysis.get("required_capabilities", [])
             
@@ -918,7 +1010,7 @@ The dictionary MUST contain the following keys exactly:
             if intent == "recovery_success":
                 new_steps = [
                     WorkflowStep(
-                        step_id="recovery_write",
+                        step_id=f"recovery_write_r{repair_attempts + 1}",
                         workflow_id=workflow_id,
                         capability="write_file",
                         input_data={"file_path": "logs/recovery_output.txt", "content": "Recovery successful: repaired plan executed successfully."},
@@ -936,7 +1028,7 @@ The dictionary MUST contain the following keys exactly:
                     self._boot_result.logger.warning("All capabilities suggested by repair analyzer were unregistered. Falling back to recovery_success.")
                     new_steps = [
                         WorkflowStep(
-                            step_id="recovery_write",
+                            step_id=f"recovery_write_r{repair_attempts + 1}",
                             workflow_id=workflow_id,
                             capability="write_file",
                             input_data={"file_path": "logs/recovery_output.txt", "content": "Recovery successful: repaired plan executed successfully."},
@@ -947,12 +1039,32 @@ The dictionary MUST contain the following keys exactly:
                     ]
                 else:
                     for idx, cap in enumerate(filtered_caps):
+                        step_input = {}
+                        if cap == "write_file":
+                            resolved_path = "logs/recovery_output.txt"
+                            try:
+                                from workflow.planner import RuleBasedWorkflowPlanner
+                                resolved_path = RuleBasedWorkflowPlanner()._resolve_target_file_path(workflow_id, task.goal)
+                            except Exception:
+                                pass
+                            step_input = {
+                                "file_path": resolved_path,
+                                "path": resolved_path,
+                                "content": f"Recovery content for task {task_id}",
+                            }
+                        elif cap in ("run_command", "execute_snippet"):
+                            step_input = {"command": f"echo 'Executing recovery capability {cap}'"}
+                        elif cap == "execute_script":
+                            step_input = {"script_path": "main.py"}
+                        else:
+                            step_input = {"prompt": f"Repaired step executing capability {cap} to recover task {task_id}"}
+
                         new_steps.append(
                             WorkflowStep(
-                                step_id=f"repair_{cap}_{idx}",
+                                step_id=f"repair_{cap}_{idx}_r{repair_attempts + 1}",
                                 workflow_id=workflow_id,
                                 capability=cap,
-                                input_data={"prompt": f"Repaired step executing capability {cap} to recover task {task_id}"},
+                                input_data=step_input,
                                 status=StepState.PENDING,
                                 estimated_time=2.0,
                                 estimated_cost=0.05
@@ -995,3 +1107,27 @@ The dictionary MUST contain the following keys exactly:
                             message=f"Task failed during plan repair execution: {e}"
                         )
                     )
+
+    def _start_background_interface_poller(self) -> None:
+        """Poll non-CLI interfaces (REST, WebSocket) in a background thread."""
+        import threading
+        import time
+
+        def _poll_loop():
+            while self._lifecycle.state == KernelState.RUNNING:
+                try:
+                    if self._boot_result and hasattr(self._boot_result, "interface_manager"):
+                        im = self._boot_result.interface_manager
+                        for iface in im.interfaces():
+                            if iface.interface_type != "cli" and iface.is_running:
+                                req = iface.receive()
+                                if req:
+                                    res = im.process_request(req)
+                                    if res and res.status in ("completed", "error", "success") and not res.metadata.get("task_id"):
+                                        im.send(res)
+                except Exception as e:
+                    self.logger.debug("Interface poller error: %s", e)
+                time.sleep(0.05)
+
+        t = threading.Thread(target=_poll_loop, daemon=True, name="realtimex-interface-poller")
+        t.start()

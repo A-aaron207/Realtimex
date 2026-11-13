@@ -50,8 +50,19 @@ class WorkerManager:
         self._pools: dict[str, WorkerPool] = {}
         self._lock = threading.RLock()
 
+        # Signalled whenever any worker returns to IDLE so the scheduler
+        # can wake up instead of busy-polling (fixes audit CRITICAL #2).
+        self._worker_available = threading.Event()
+        self._worker_available.set()  # Initially workers are available (pools not yet saturated)
+
         # Initialize defaults
         self._initialize_pools_and_workers()
+
+        # Listen for dynamically loaded modules to expand pools automatically
+        try:
+            self._event_bus.subscribe("ModuleLoaded", self._on_module_loaded)
+        except Exception as e:
+            self._logger.warning("Could not subscribe WorkerManager to ModuleLoaded: %s", e)
 
     def _module_resolver(self, module_id: str) -> LoadedModule | None:
         """Resolve module ID to instance."""
@@ -61,8 +72,73 @@ class WorkerManager:
                 return lm
         return None
 
+    def _on_module_loaded(self, event: Event) -> None:
+        """
+        Event handler for KernelEventType.MODULE_LOADED ("ModuleLoaded").
+        Automatically registers worker pools for all capabilities declared by newly loaded modules.
+        """
+        capabilities = event.payload.get("capabilities", [])
+        if isinstance(capabilities, list):
+            for cap in capabilities:
+                if isinstance(cap, str) and cap:
+                    self.register_capability(cap)
+
+    def register_capability(self, capability: str, initial_workers: int = 1) -> WorkerPool:
+        """
+        Register a worker pool for a capability and spin up initial workers.
+
+        If a pool already exists for the capability, returns the existing pool.
+        This provides dynamic capability expansion when new modules are loaded.
+        """
+        with self._lock:
+            if capability in self._pools:
+                return self._pools[capability]
+
+            pool = WorkerPool(capability)
+            self._pools[capability] = pool
+
+            for i in range(1, max(1, initial_workers) + 1):
+                worker_id = f"{capability}_worker_{i:02d}"
+                worker = WorkerRuntime(
+                    worker_id=worker_id,
+                    worker_type="agent_worker",
+                    supported_capability=capability,
+                    event_bus=self._event_bus,
+                    module_resolver=self._module_resolver,
+                    metadata={"pool": capability},
+                )
+
+                # Move from OFFLINE to STARTING to IDLE
+                worker.set_state(WorkerState.STARTING)
+                worker.set_state(WorkerState.IDLE)
+
+                self._registry.register(worker)
+                pool.add_worker(worker)
+
+                # Emit WorkerStarted
+                self._event_bus.publish(
+                    Event(
+                        name="WorkerStarted",
+                        source="workers.manager",
+                        payload={"worker_id": worker_id, "capability": capability},
+                    )
+                )
+
+            self._worker_available.set()
+            self._logger.info("Registered worker pool for capability '%s' with %d worker(s)", capability, initial_workers)
+            return pool
+
+    def has_idle_worker(self, capability: str) -> bool:
+        """
+        Check whether at least one idle worker is available for the given capability.
+        Encapsulates WorkerPool state so external components don't inspect pools directly.
+        """
+        with self._lock:
+            pool = self._pools.get(capability)
+            return pool.has_idle_worker() if pool else False
+
     def _initialize_pools_and_workers(self) -> None:
-        """Create worker pools and pre-populate with workers for demonstration."""
+        """Create worker pools and pre-populate with workers."""
         capabilities = [
             "plan_task",
             "web_search",
@@ -76,35 +152,17 @@ class WorkerManager:
         ]
 
         for cap in capabilities:
-            pool = WorkerPool(cap)
-            self._pools[cap] = pool
+            self.register_capability(cap)
 
-            # Pre-register 1 worker per capability
-            worker_id = f"{cap}_worker_01"
-            worker = WorkerRuntime(
-                worker_id=worker_id,
-                worker_type="agent_worker",
-                supported_capability=cap,
-                event_bus=self._event_bus,
-                module_resolver=self._module_resolver,
-                metadata={"pool": cap},
-            )
-
-            # Move from OFFLINE to STARTING to IDLE
-            worker.set_state(WorkerState.STARTING)
-            worker.set_state(WorkerState.IDLE)
-
-            self._registry.register(worker)
-            pool.add_worker(worker)
-
-            # Emit WorkerStarted
-            self._event_bus.publish(
-                Event(
-                    name="WorkerStarted",
-                    source="workers.manager",
-                    payload={"worker_id": worker_id, "capability": cap},
-                )
-            )
+        # Also initialize pools for any modules already loaded
+        try:
+            for lm in self._loaded_modules_provider():
+                if hasattr(lm, "manifest") and lm.manifest and hasattr(lm.manifest, "capabilities"):
+                    for cap in lm.manifest.capabilities:
+                        if isinstance(cap, str) and cap:
+                            self.register_capability(cap)
+        except Exception:
+            pass
 
     def get_pool(self, capability: str) -> WorkerPool | None:
         """
@@ -114,39 +172,35 @@ class WorkerManager:
         with self._lock:
             if capability not in self._pools:
                 try:
-                    pool = WorkerPool(capability)
-                    self._pools[capability] = pool
-                    
-                    worker_id = f"{capability}_worker_01"
-                    worker = WorkerRuntime(
-                        worker_id=worker_id,
-                        worker_type="agent_worker",
-                        supported_capability=capability,
-                        event_bus=self._event_bus,
-                        module_resolver=self._module_resolver,
-                        metadata={"pool": capability},
-                    )
-
-                    worker.set_state(WorkerState.STARTING)
-                    worker.set_state(WorkerState.IDLE)
-
-                    self._registry.register(worker)
-                    pool.add_worker(worker)
-
-                    self._logger.info("Dynamically initialized pool and registered worker %s for capability '%s'", worker_id, capability)
-
-                    # Emit WorkerStarted
-                    self._event_bus.publish(
-                        Event(
-                            name="WorkerStarted",
-                            source="workers.manager",
-                            payload={"worker_id": worker_id, "capability": capability},
-                        )
-                    )
+                    return self.register_capability(capability)
                 except Exception as e:
                     self._logger.exception("Failed to dynamically register pool/worker for capability '%s': %s", capability, e)
                     return None
             return self._pools.get(capability)
+
+    def list_workers(self) -> list[BaseWorker]:
+        """Return a flat list of all workers across all capability pools."""
+        workers: list[BaseWorker] = []
+        with self._lock:
+            for pool in self._pools.values():
+                workers.extend(pool.list_workers())
+        return workers
+
+    def wait_for_idle_worker(self, timeout: float = 1.0) -> bool:
+        """
+        Block until at least one idle worker becomes available across any pool,
+        or until *timeout* seconds elapse.
+
+        This replaces the scheduler's busy-poll / sleep(0.05) pattern.
+        The event is set by execute() whenever a worker is returned to IDLE.
+
+        Args:
+            timeout: Maximum seconds to wait. Defaults to 1.0.
+
+        Returns:
+            True if a worker became available within the timeout, False otherwise.
+        """
+        return self._worker_available.wait(timeout=timeout)
 
     def execute(self, context: ExecutionContext) -> WorkerReport:
         """
@@ -172,13 +226,20 @@ class WorkerManager:
             if not worker:
                 raise WorkerPoolError(f"No idle workers available in pool for capability '{cap}'.")
 
+            # If no idle workers remain across ALL pools, clear the event so
+            # the scheduler knows to wait before re-checking.
+            if not any(p.has_idle_worker() for p in self._pools.values()):
+                self._worker_available.clear()
+
         try:
             # Let the worker execute the context
             report = worker.execute(context)
             return report
         finally:
-            # Release worker back to the pool
+            # Release worker back to the pool, then signal availability
             pool.return_worker(worker.worker_id)
+            self._worker_available.set()
+
 
     def heartbeat(self, worker_id: str) -> None:
         """Record heartbeat and emit event."""

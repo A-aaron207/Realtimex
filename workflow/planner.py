@@ -4,6 +4,8 @@ Extensible Workflow Planner that converts user goals into execution step graphs.
 
 from __future__ import annotations
 
+import os
+import re
 import json
 import asyncio
 from typing import Any
@@ -62,8 +64,13 @@ class RuleBasedWorkflowPlanner(WorkflowPlanner):
             return native_steps
             
         # Check for compound code and save requests
-        is_code_request = any(kw in goal_lower for kw in ["write", "code", "create", "make", "generate", "build", "refactor"]) and any(kw in goal_lower for kw in ["python", "html", "css", "calculator", "function", "program", "script"])
-        is_save_request = "save" in goal_lower or "write file" in goal_lower or "write to file" in goal_lower
+        is_code_request = any(kw in goal_lower for kw in ["write", "code", "create", "make", "generate", "build", "refactor", "develop", "design"]) and any(kw in goal_lower for kw in ["python", "html", "css", "calculator", "function", "program", "script", "ui", "interface", "webpage", "page", "website", "app", "application", "chatbot", "bot", "dashboard"])
+        is_save_request = any(kw in goal_lower for kw in ["save", "write file", "write to file", "desktop", "downloads", "documents", "in folder", "to folder", "in directory", "to directory"]) or bool(re.search(r'\b[a-zA-Z0-9_\-]+\.[a-zA-Z0-9]{1,5}\b', goal_lower))
+        # "same file", "that file", "the file" → user wants to re-save a previously generated
+        # result to a new location, NOT generate fresh code. Route to write_file only.
+        is_redirect_request = any(kw in goal_lower for kw in ["same file", "that file", "the file", "same webpage", "that webpage", "copy it", "put it"])
+        if is_redirect_request or (is_code_request and is_save_request and any(kw in goal_lower for kw in ["same", "the file", "that file"])):
+            return self._build_write_file_workflow(workflow_id, goal)
         if is_code_request and is_save_request:
             return self._build_code_and_save_workflow(workflow_id, goal)
             
@@ -73,10 +80,12 @@ class RuleBasedWorkflowPlanner(WorkflowPlanner):
             return self._build_multistep_workflow(workflow_id, goal)
         if "read local file" in goal_lower or "read file" in goal_lower:
             return self._build_read_file_workflow(workflow_id, goal)
-        if any(kw in goal_lower for kw in ["python", "generate code", "coding", "function to"]):
-            return self._build_generate_code_workflow(workflow_id, goal)
+        # Check summarize BEFORE generic code keywords — "summarize what Python is..."
+        # should route to summarization, not code generation.
         if "summarize" in goal_lower or "summarization" in goal_lower:
             return self._build_summarization_workflow(workflow_id, goal)
+        if any(kw in goal_lower for kw in ["python", "generate code", "coding", "function to"]):
+            return self._build_generate_code_workflow(workflow_id, goal)
         if "research" in goal_lower or "search" in goal_lower:
             return self._build_research_workflow(workflow_id, goal)
         if any(kw in goal_lower or kw == goal_lower for kw in ["explain", "answer", "question", "what", "how", "recursion", "hello", "hi", "hey", "help", "hello?"]):
@@ -126,6 +135,7 @@ Planning Guidelines:
    - Step 2: write_file to save the generated content to the target file path.
 2. To feed the output of one step into a subsequent step, use the cross-step reference string format: "Process <step_id> output" as the value of the parameter.
    Example: If step_id is "generate_code_0", write_file's input should look like: {{"path": "/home/user/Desktop/index.html", "content": "Process generate_code_0 output"}}.
+3. When moving, copying, or deleting files, NEVER use shell wildcards like 'mv *', 'mv ./*', 'cp *', 'rm -rf *'. ALWAYS specify the exact, concrete filenames (e.g. 'mv index.html style.css main.js /path/to/destination').
 {history_str}
 User Goal:
 "{goal}"
@@ -200,16 +210,24 @@ The dictionary MUST contain the following keys exactly:
             return self._build_retry_workflow(workflow_id, goal)
         if "permission" in goal_lower:
             return self._build_permission_workflow(workflow_id, goal)
+        # Check compound code and save requests
+        is_code = any(kw in goal_lower for kw in ["write", "code", "create", "make", "generate", "build", "refactor", "develop", "design"]) and any(kw in goal_lower for kw in ["python", "html", "css", "calculator", "function", "program", "script", "ui", "interface", "webpage", "page", "website", "app", "application", "chatbot", "bot", "dashboard"])
+        is_save = any(kw in goal_lower for kw in ["save", "write file", "write to file", "desktop", "downloads", "documents", "folder", "directory"]) or bool(re.search(r'\b[a-zA-Z0-9_\-]+\.[a-zA-Z0-9]{1,5}\b', goal_lower))
+        if any(kw in goal_lower for kw in ["same file", "that file", "the file", "same webpage", "that webpage", "copy it", "put it"]):
+            return self._build_write_file_workflow(workflow_id, goal)
+        if is_code and is_save:
+            return self._build_code_and_save_workflow(workflow_id, goal)
         if "save" in goal_lower or "write file" in goal_lower or "write to file" in goal_lower:
             return self._build_write_file_workflow(workflow_id, goal)
         if "multi-step" in goal_lower or "read and summarize" in goal_lower:
             return self._build_multistep_workflow(workflow_id, goal)
         if "read local file" in goal_lower or "read file" in goal_lower:
             return self._build_read_file_workflow(workflow_id, goal)
-        if any(kw in goal_lower for kw in ["python", "generate code", "coding", "function to"]):
-            return self._build_generate_code_workflow(workflow_id, goal)
+        # summarize must beat "python" keyword — "summarize what Python is" → summarize
         if "summarize" in goal_lower or "summarization" in goal_lower:
             return self._build_summarization_workflow(workflow_id, goal)
+        if any(kw in goal_lower for kw in ["python", "generate code", "coding", "function to"]):
+            return self._build_generate_code_workflow(workflow_id, goal)
         if "research" in goal_lower or "search" in goal_lower:
             return self._build_research_workflow(workflow_id, goal)
         if any(kw in goal_lower for kw in ["explain", "answer", "question", "what", "how", "recursion", "hello", "hi", "hey", "help"]):
@@ -434,13 +452,27 @@ The dictionary MUST contain the following keys exactly:
                 step_id = f"{cap}_{idx}"
                 deps = frozenset([prev_id]) if prev_id else frozenset()
                 
-                # Fetch inputs generated by LLM, fallback to default prompt format if missing
                 inp = step_inputs.get(step_id, step_inputs.get(cap, {}))
                 if not inp:
                     inp = {"prompt": goal if idx == 0 else f"Process {prev_id} output"}
-                elif "prompt" not in inp and "text" not in inp and "command" not in inp and "path" not in inp and "query" not in inp:
+                elif "prompt" not in inp and "text" not in inp and "command" not in inp and "path" not in inp and "query" not in inp and "file_path" not in inp:
                     # If LLM returned empty or mismatch, overlay basic prompt
                     inp["prompt"] = goal
+                
+                # Concrete parameter binding for capabilities requiring specific inputs
+                if cap == "write_file":
+                    if not inp.get("file_path") and not inp.get("path") and not inp.get("target"):
+                        resolved_path = self._resolve_target_file_path(workflow_id, goal)
+                        inp["file_path"] = resolved_path
+                        inp["path"] = resolved_path
+                    if not inp.get("content"):
+                        inp["content"] = f"Process {prev_id} output" if prev_id else "Process code_gen output"
+                elif cap == "generate_code":
+                    if not inp.get("file_path") and not inp.get("path"):
+                        inp["file_path"] = self._resolve_target_file_path(workflow_id, goal)
+                elif cap in ("run_command", "execute_snippet"):
+                    if not inp.get("command"):
+                        inp["command"] = inp.get("prompt", goal)
                 
                 steps.append(
                     WorkflowStep(
@@ -819,7 +851,7 @@ The dictionary MUST contain the following keys exactly:
     def _resolve_target_file_path(self, workflow_id: str, goal: str) -> str:
         """Resolve the target path and filename for a file operation, supporting session history and fallback."""
         goal_lower = goal.lower()
-        import os
+        import os, re
         path = "saved_file.txt"
         session_goals = []
         try:
@@ -839,43 +871,56 @@ The dictionary MUST contain the following keys exactly:
                     session_goals.append(t.goal.lower())
         except Exception:
             pass
-            
+
         combined_context_goals = " ".join(session_goals) + " " + goal.lower()
-        
+
+        # --- Step 1: Try to find an explicit filename (e.g. "index.html", "app.py") ---
+        filename_match = re.search(r'\b([a-zA-Z0-9_\-]+\.[a-zA-Z0-9]{1,5})\b', combined_context_goals)
+        explicit_filename = filename_match.group(1) if filename_match else None
+
+        # --- Step 1b: Try to find a named entity like "called Iris", "named Iris" ---
+        if not explicit_filename:
+            named_match = re.search(r'\b(?:called|named|title|titling)\s+([a-zA-Z0-9_\-]+)\b', combined_context_goals)
+            if named_match:
+                base_name = named_match.group(1).lower()
+                if any(w in combined_context_goals for w in ("html", "webpage", "website", "ui", "interface", "page")):
+                    explicit_filename = f"{base_name}.html"
+                elif any(w in combined_context_goals for w in ("python", "script", "program")):
+                    explicit_filename = f"{base_name}.py"
+                elif "css" in combined_context_goals:
+                    explicit_filename = f"{base_name}.css"
+                elif any(w in combined_context_goals for w in ("js", "javascript")):
+                    explicit_filename = f"{base_name}.js"
+                else:
+                    explicit_filename = f"{base_name}.txt"
+
+        # --- Step 2: Infer from content-type keywords if no explicit name ---
+        def _infer_filename(ctx: str) -> str:
+            if "html" in ctx or "webpage" in ctx or "web page" in ctx or "website" in ctx or "ui" in ctx or "interface" in ctx or "landing" in ctx or "page" in ctx:
+                return "index.html"
+            if "css" in ctx or "stylesheet" in ctx:
+                return "style.css"
+            if "javascript" in ctx or " js " in ctx:
+                return "script.js"
+            if "even" in ctx or "odd" in ctx:
+                return "even_odd.py"
+            if "fibonacci" in ctx:
+                return "fibonacci.py"
+            if "calculator" in ctx:
+                return "calculator.py"
+            if "login" in ctx:
+                return "login.html"
+            return "saved_file.txt"
+
         if "desktop" in combined_context_goals:
             desktop_dir = os.path.join(os.path.expanduser("~"), "Desktop")
-            import re
-            filename_match = re.search(r'([a-zA-Z0-9_\-]+\.py|[a-zA-Z0-9_\-]+\.[a-zA-Z0-9]+)', combined_context_goals)
-            if filename_match:
-                filename = filename_match.group(1)
-            else:
-                if "even" in combined_context_goals or "odd" in combined_context_goals:
-                    filename = "even_odd.py"
-                elif "fibonacci" in combined_context_goals:
-                    filename = "fibonacci.py"
-                elif "calculator" in combined_context_goals:
-                    filename = "calculator.py"
-                elif "login" in combined_context_goals:
-                    filename = "login.html"
-                else:
-                    filename = "script.py"
+            filename = explicit_filename or _infer_filename(combined_context_goals)
             path = os.path.join(desktop_dir, filename)
         else:
-            import re
-            filename_match = re.search(r'([a-zA-Z0-9_\-]+\.[a-zA-Z0-9]+)', combined_context_goals)
-            if filename_match:
-                path = filename_match.group(1)
+            if explicit_filename:
+                path = explicit_filename
             else:
-                if "even" in combined_context_goals or "odd" in combined_context_goals:
-                    path = "even_odd.py"
-                elif "fibonacci" in combined_context_goals:
-                    path = "fibonacci.py"
-                elif "calculator" in combined_context_goals:
-                    path = "calculator.py"
-                elif "login" in combined_context_goals:
-                    path = "login.html"
-                else:
-                    path = "saved_file.txt"
+                path = _infer_filename(combined_context_goals)
         return path
 
     def _build_write_file_workflow(self, workflow_id: str, goal: str) -> list[WorkflowStep]:
@@ -895,16 +940,105 @@ The dictionary MUST contain the following keys exactly:
             )
         ]
 
+    def _get_session_generated_files(self, workflow_id: str) -> list[str]:
+        """Find recently generated files from this session or workspace to move/copy."""
+        found_files: list[str] = []
+        try:
+            from services.registry import ServiceRegistry
+            registry = ServiceRegistry.get_instance()
+            wf_mgr = registry.get("workflow_manager").metadata["manager"]
+            task_mgr = registry.get("task_manager").metadata["manager"]
+            wf = wf_mgr.load_workflow(workflow_id)
+            current_task = task_mgr.get_task(wf.parent_task_id)
+            session_id = current_task.metadata.get("session_id")
+            if session_id:
+                all_tasks = task_mgr._repository.find_by(
+                    lambda t: t.metadata.get("session_id") == session_id
+                )
+                all_tasks = sorted(all_tasks, key=lambda t: t.created_at, reverse=True)
+                for t in all_tasks:
+                    matches = re.findall(r'\b([a-zA-Z0-9_\-]+\.[a-zA-Z0-9]{1,5})\b', t.goal)
+                    for m in matches:
+                        if m not in found_files and os.path.exists(m):
+                            found_files.append(m)
+        except Exception:
+            pass
+
+        # If none found from session goals, check common generated files in CWD
+        if not found_files:
+            common = ["index.html", "style.css", "main.js", "script.js", "Index.html", "Style.css", "iris.html", "saved_file.txt"]
+            found_files = [f for f in common if os.path.exists(f)]
+
+        return found_files
+
     def _build_code_and_save_workflow(self, workflow_id: str, goal: str) -> list[WorkflowStep]:
-        """Generate a 2-step code generation and saving workflow."""
-        path = self._resolve_target_file_path(workflow_id, goal)
+        """Generate a code generation and saving workflow, supporting single and multiple files."""
+        # Check if the goal specifies multiple concrete filenames (e.g. Index.html, Style.css, main.js)
+        raw_filenames = re.findall(r'\b([a-zA-Z0-9_\-]+\.(?:html|css|js|ts|py|json|txt))\b', goal, re.IGNORECASE)
+        filenames: list[str] = []
+        for f in raw_filenames:
+            if f.lower() not in [x.lower() for x in filenames]:
+                filenames.append(f)
+
         from workflow.step import StepState
+        if len(filenames) > 1:
+            goal_lower = goal.lower()
+            target_dir = ""
+            if "desktop" in goal_lower:
+                target_dir = os.path.join(os.path.expanduser("~"), "Desktop")
+            elif "downloads" in goal_lower:
+                target_dir = os.path.join(os.path.expanduser("~"), "Downloads")
+            elif "documents" in goal_lower:
+                target_dir = os.path.join(os.path.expanduser("~"), "Documents")
+
+            steps = []
+            for idx, fname in enumerate(filenames):
+                file_path = os.path.join(target_dir, fname) if target_dir else fname
+                code_step_id = f"code_gen_{idx}"
+                write_step_id = f"write_{idx}"
+                
+                ext = os.path.splitext(fname)[1].lower()
+                if ext in (".html", ".htm"):
+                    file_prompt = f"Create the HTML document {fname} for the web project. Link to stylesheet and scripts properly. Goal: {goal}"
+                elif ext == ".css":
+                    file_prompt = f"Create the CSS stylesheet {fname} matching the design. Goal: {goal}"
+                elif ext in (".js", ".ts"):
+                    file_prompt = f"Create the JavaScript code {fname} for the interactive elements. Goal: {goal}"
+                else:
+                    file_prompt = f"Create the code for {fname}. Goal: {goal}"
+
+                steps.append(
+                    WorkflowStep(
+                        step_id=code_step_id,
+                        workflow_id=workflow_id,
+                        capability="generate_code",
+                        input_data={"prompt": file_prompt, "file_path": file_path},
+                        status=StepState.PENDING,
+                        estimated_time=3.0,
+                        estimated_cost=0.08,
+                    )
+                )
+                steps.append(
+                    WorkflowStep(
+                        step_id=write_step_id,
+                        workflow_id=workflow_id,
+                        capability="write_file",
+                        input_data={"path": file_path, "file_path": file_path, "content": f"Process {code_step_id} output"},
+                        status=StepState.PENDING,
+                        dependencies=frozenset([code_step_id]),
+                        estimated_time=1.0,
+                        estimated_cost=0.02,
+                    )
+                )
+            return steps
+
+        path = self._resolve_target_file_path(workflow_id, goal)
         return [
             WorkflowStep(
                 step_id="code_gen",
                 workflow_id=workflow_id,
                 capability="generate_code",
-                input_data={"prompt": goal},
+                input_data={"prompt": goal, "file_path": path},
                 status=StepState.PENDING,
                 estimated_time=4.0,
                 estimated_cost=0.12,
@@ -920,6 +1054,68 @@ The dictionary MUST contain the following keys exactly:
                 estimated_cost=0.02,
             )
         ]
+
+    def _extract_path_from_goal(self, goal: str, goal_lower: str) -> str:
+        """
+        Extract a file/directory path from a natural language goal string.
+        
+        Handles patterns like:
+        - "delete all contents from my Desktop folder"
+        - "empty the ~/Downloads directory"
+        - "clear /home/user/temp"
+        - "remove all files from Documents"
+        """
+        import os
+        import re
+        
+        # 1. Try to find a ~ path first (e.g. ~/Desktop) — before absolute paths
+        #    because ~/Downloads would otherwise match the absolute regex as /Downloads
+        tilde_match = re.search(r'(~/[a-zA-Z0-9_\-\./]+)', goal)
+        if tilde_match:
+            return os.path.expanduser(tilde_match.group(1))
+        
+        # 2. Try to find an explicit absolute path (e.g. /home/aarons/Desktop)
+        abs_match = re.search(r'(/(?:[a-zA-Z0-9_\-\.~]+/)*[a-zA-Z0-9_\-\.~]+)', goal)
+        if abs_match:
+            return abs_match.group(1)
+        
+        # 3. Map common named directories from natural language
+        home_dir = os.path.expanduser("~")
+        named_dirs = {
+            "desktop": os.path.join(home_dir, "Desktop"),
+            "downloads": os.path.join(home_dir, "Downloads"),
+            "documents": os.path.join(home_dir, "Documents"),
+            "pictures": os.path.join(home_dir, "Pictures"),
+            "videos": os.path.join(home_dir, "Videos"),
+            "music": os.path.join(home_dir, "Music"),
+            "templates": os.path.join(home_dir, "Templates"),
+            "public": os.path.join(home_dir, "Public"),
+            "home": home_dir,
+            "temp": "/tmp",
+            "tmp": "/tmp",
+        }
+        
+        for name, path in named_dirs.items():
+            # Match "desktop folder", "my desktop", "the desktop directory", etc.
+            if re.search(rf'\b{name}\b', goal_lower):
+                return path
+        
+        # 4. Try to extract path after common prepositions (from, in, at, of)
+        prep_match = re.search(r'(?:from|in|at|of)\s+([a-zA-Z0-9_\-\./~]+(?:/[a-zA-Z0-9_\-\.]+)*)', goal)
+        if prep_match:
+            candidate = prep_match.group(1)
+            if candidate and candidate not in ("my", "the", "a", "all", "folder", "directory", "file"):
+                return os.path.expanduser(candidate)
+        
+        # 5. Fallback: try to extract path after deletion keywords
+        for kw in ("delete file", "remove file", "delete folder", "remove folder", "rmdir", "rm"):
+            if kw in goal_lower:
+                idx = goal_lower.index(kw)
+                remainder = goal[idx + len(kw):].strip()
+                if remainder:
+                    return remainder.split()[0]
+        
+        return ""
 
     def _build_native_tool_workflow(self, workflow_id: str, goal: str) -> list[WorkflowStep] | None:
         goal_lower = goal.lower()
@@ -946,67 +1142,117 @@ The dictionary MUST contain the following keys exactly:
                     )
                 ]
 
-        # 2. File deletion
-        if any(kw in goal_lower for kw in ("delete file", "remove file", "delete folder", "remove folder", "rmdir", "rm ")):
-            path = ""
-            for kw in ("delete file", "remove file", "delete folder", "remove folder", "rmdir", "rm"):
-                if kw in goal_lower:
-                    idx = goal_lower.index(kw)
-                    path = goal[idx + len(kw):].strip()
-                    break
+        # 2. File/folder deletion (including "delete all contents from folder" patterns)
+        deletion_keywords_exact = ("delete file", "remove file", "delete folder", "remove folder", "rmdir", "rm ")
+        deletion_keywords_broad = ("delete all", "delete the contents", "delete contents", "remove all",
+                                   "remove the contents", "remove contents", "erase all", "erase contents",
+                                   "delete everything")
+        # Also detect combinations: action word + target word even when separated
+        # e.g. "empty the Downloads folder", "clear my temp directory", "wipe the desktop"
+        deletion_action_words = ("empty", "clear", "clean", "wipe", "purge")
+        deletion_target_words = ("folder", "directory", "dir", "desktop", "downloads", "documents",
+                                 "pictures", "videos", "music", "templates", "public", "temp", "tmp")
+        has_deletion_combo = (any(w in goal_lower for w in deletion_action_words)
+                              and any(w in goal_lower for w in deletion_target_words))
+        is_deletion_request = any(kw in goal_lower for kw in deletion_keywords_exact + deletion_keywords_broad) or has_deletion_combo
+        if is_deletion_request:
+            path = self._extract_path_from_goal(goal, goal_lower)
             if path:
                 path = path.strip("'\"")
+                # If the goal indicates clearing CONTENTS of a folder (not deleting the folder itself),
+                # use find -mindepth 1 -delete to safely remove all contents without removing the parent dir
+                is_contents_deletion = any(kw in goal_lower for kw in (
+                    "contents", "all the contents", "everything in", "everything from",
+                    "all files", "all the files", "files from", "files in",
+                    "delete all", "remove all", "clear", "empty", "clean", "wipe", "erase all"
+                ))
+                # Resolve ~ and common named directories
+                resolved_path = os.path.expanduser(path)
+                if is_contents_deletion and os.path.isdir(resolved_path):
+                    # Safely delete directory contents without removing the directory itself
+                    cmd = f"find {resolved_path} -mindepth 1 -maxdepth 1 -exec rm -rf {{}} +"
+                else:
+                    cmd = f"rm -rf {resolved_path}"
                 return [
                     WorkflowStep(
                         step_id="delete_path",
                         workflow_id=workflow_id,
                         capability="run_command",
-                        input_data={"command": f"rm -rf {path}"},
+                        input_data={"command": cmd},
                         status=StepState.PENDING,
                         estimated_time=1.0,
                     )
                 ]
 
-        # 3. File copy
-        if any(kw in goal_lower for kw in ("copy file", "copy folder", "cp ")):
-            import re
-            paths = re.findall(r"(?:/[a-zA-Z0-9_\-\.\~]+)+|[a-zA-Z0-9_\-\.\~]+", goal)
-            filtered_paths = [p for p in paths if p.lower() not in ("copy", "file", "folder", "cp", "to")]
-            if len(filtered_paths) >= 2:
-                src, dest = filtered_paths[0], filtered_paths[1]
+        # 3. File move / copy / rename (including conversational "move those files to desktop", "copy them to ...")
+        is_move_goal = any(kw in goal_lower for kw in ("move", "mv ", "rename"))
+        is_copy_goal = any(kw in goal_lower for kw in ("copy", "cp "))
+        if is_move_goal or is_copy_goal:
+            op_cmd = "mv" if is_move_goal else "cp -r"
+            dest = self._extract_path_from_goal(goal, goal_lower)
+            is_conversational = any(kw in goal_lower for kw in ("those files", "the files", "these files", "them", "those", "these", "files"))
+            
+            # Case A: Conversational reference to session files (e.g. "move those files to my desktop")
+            if is_conversational and dest:
+                session_files = self._get_session_generated_files(workflow_id)
+                existing_files = [f for f in session_files if os.path.exists(f)]
+                target_files = existing_files if existing_files else session_files
+                if not target_files:
+                    target_files = [f for f in ("Index.html", "Style.css", "main.js", "index.html", "style.css", "script.js") if os.path.exists(f)]
+                if not target_files:
+                    target_files = ["index.html", "style.css", "main.js"]
+                cmd = f"{op_cmd} {' '.join(target_files)} {dest}/"
                 return [
                     WorkflowStep(
-                        step_id="copy_path",
+                        step_id="move_session_files" if is_move_goal else "copy_session_files",
                         workflow_id=workflow_id,
                         capability="run_command",
-                        input_data={"command": f"cp -r {src} {dest}"},
+                        input_data={"command": cmd},
                         status=StepState.PENDING,
                         estimated_time=1.0,
                     )
                 ]
 
-        # 4. File move / rename
-        if any(kw in goal_lower for kw in ("move file", "move folder", "rename file", "rename folder", "mv ")):
-            import re
+            # Case B: Explicit source and destination paths in the goal
             paths = re.findall(r"(?:/[a-zA-Z0-9_\-\.\~]+)+|[a-zA-Z0-9_\-\.\~]+", goal)
-            filtered_paths = [p for p in paths if p.lower() not in ("move", "rename", "file", "folder", "mv", "to")]
-            if len(filtered_paths) >= 2:
-                src, dest = filtered_paths[0], filtered_paths[1]
+            filtered_paths = [p for p in paths if p.lower() not in ("move", "rename", "file", "folder", "mv", "cp", "copy", "to", "now", "those", "these", "the", "in", "into")]
+            if dest and len(filtered_paths) >= 1:
+                src_candidates = [p for p in filtered_paths if p.lower() not in ("desktop", "downloads", "documents") and (os.path.exists(p) or "." in p)]
+                if src_candidates:
+                    cmd = f"{op_cmd} {' '.join(src_candidates)} {dest}/"
+                    return [
+                        WorkflowStep(
+                            step_id="move_path" if is_move_goal else "copy_path",
+                            workflow_id=workflow_id,
+                            capability="run_command",
+                            input_data={"command": cmd},
+                            status=StepState.PENDING,
+                            estimated_time=1.0,
+                        )
+                    ]
+            elif len(filtered_paths) >= 2:
+                src, dst = filtered_paths[0], filtered_paths[1]
+                cmd = f"{op_cmd} {src} {dst}"
                 return [
                     WorkflowStep(
-                        step_id="move_path",
+                        step_id="move_path" if is_move_goal else "copy_path",
                         workflow_id=workflow_id,
                         capability="run_command",
-                        input_data={"command": f"mv {src} {dest}"},
+                        input_data={"command": cmd},
                         status=StepState.PENDING,
                         estimated_time=1.0,
                     )
                 ]
                 
-        # 5. Compound intents check (e.g. Create a login webpage or Create login.html)
-        has_create_keyword = any(kw in goal_lower for kw in ["create", "write", "generate", "build", "make", "save"])
-        has_file_target = any(kw in goal_lower for kw in ["page", "webpage", "website", "calculator", "script", "program", "login", ".py", ".html", ".css", ".js", ".json"])
-        if has_create_keyword and has_file_target:
+        # 5. Compound intents check (e.g. Create a login webpage, Create UI Called Iris in desktop, etc.)
+        has_create_keyword = any(kw in goal_lower for kw in ["create", "write", "generate", "build", "make", "save", "develop", "design", "code", "called", "named"])
+        has_destination = any(kw in goal_lower for kw in ["desktop", "downloads", "documents", "in folder", "to folder", "in directory", "to directory", "in ~", "to ~", "in /", "to /"])
+        has_file_target = any(kw in goal_lower for kw in [
+            "page", "webpage", "website", "calculator", "script", "program", "login",
+            ".py", ".html", ".css", ".js", ".json", "html", "css",
+            "ui", "interface", "app", "application", "chatbot", "bot", "dashboard"
+        ])
+        if (has_create_keyword and has_file_target) or (has_file_target and has_destination):
             return self._build_code_and_save_workflow(workflow_id, goal)
             
         return None

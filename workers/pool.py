@@ -49,6 +49,21 @@ class WorkerPool:
                 return True
             return False
 
+    def has_idle_worker(self) -> bool:
+        """
+        Return True if at least one IDLE worker exists in this pool.
+
+        Thread-safe: acquires the pool lock before inspecting workers.
+        Prefer this over accessing _workers directly.
+        """
+        with self._lock:
+            return any(w.state == WorkerState.IDLE for w in self._workers.values())
+
+    def list_workers(self) -> list[BaseWorker]:
+        """Return a copy of all workers in this pool."""
+        with self._lock:
+            return list(self._workers.values())
+
     def acquire_idle_worker(self) -> BaseWorker | None:
         """
         Acquire an idle worker from the pool, transitioning its state to ASSIGNED.

@@ -21,6 +21,60 @@ from permissions.request import PermissionRequest
 from permissions.rules import RuleEngine
 from permissions.trust import TrustManager
 
+DEFAULT_ROLE_CAPABILITY_LIMITS: dict[str, dict[str, Any]] = {
+    "admin": {
+        "allowed_capabilities": ["*"],
+        "disallowed_actions": [],
+    },
+    "user": {
+        "allowed_capabilities": ["*"],
+        "disallowed_actions": ["system_admin", "modify_security_policy"],
+    },
+    "viewer": {
+        "allowed_capabilities": [
+            "read_file",
+            "list_directory",
+            "search_files",
+            "web_search",
+            "summarize_text",
+            "generate_text",
+            "analyze_image",
+            "extract_text",
+            "describe_screenshot",
+            "compare_images",
+            "retrieve_content",
+            "research_topic",
+            "synthesize_findings",
+            "plan_task",
+            "select_records",
+            "list_databases",
+            "list_tables",
+            "diff",
+        ],
+        "disallowed_actions": [
+            "write",
+            "delete",
+            "execute",
+            "modify",
+            "create",
+            "install",
+            "commit",
+            "push",
+            "drop",
+            "destructive_command",
+            "overwrite",
+        ],
+    },
+    "guest": {
+        "allowed_capabilities": [
+            "web_search",
+            "summarize_text",
+            "generate_text",
+        ],
+        "disallowed_actions": ["*"],
+    },
+}
+
 
 class PermissionManager:
     """
@@ -43,6 +97,7 @@ class PermissionManager:
         self.cognitive_engine = cognitive_engine
         self.user_reviewer = user_reviewer
         self.logger = logger or logging.getLogger("realtimex.permissions")
+        self._role_limits = {k: dict(v) for k, v in DEFAULT_ROLE_CAPABILITY_LIMITS.items()}
 
         # Subsystems
         self.registry = PermissionRegistry()
@@ -134,6 +189,50 @@ class PermissionManager:
 
     # --- Public API ---
 
+    def is_role_allowed(self, role: str, action: str, capability: str) -> bool:
+        """
+        Evaluate if a user role is authorized to perform an action with a capability.
+        Integrates interface authentication roles with execution-time sandbox security.
+        """
+        role_key = (role or "").strip().lower()
+        if not role_key or role_key == "admin":
+            return True
+
+        limits = self._role_limits.get(role_key)
+        if limits is None:
+            limits = self._role_limits.get("user", {})
+
+        allowed_caps = limits.get("allowed_capabilities", ["*"])
+        disallowed_actions = limits.get("disallowed_actions", [])
+
+        # 1. Capability check
+        if "*" not in allowed_caps and capability not in allowed_caps:
+            return False
+
+        # 2. Action check
+        if "*" in disallowed_actions:
+            return False
+        action_lower = (action or "").strip().lower()
+        for disallowed in disallowed_actions:
+            if disallowed in action_lower:
+                return False
+
+        return True
+
+    def configure_role_limits(
+        self,
+        role: str,
+        allowed_capabilities: list[str] | None = None,
+        disallowed_actions: list[str] | None = None,
+    ) -> None:
+        """Configure or override RBAC capability limits for a role."""
+        role_key = role.strip().lower()
+        current = self._role_limits.setdefault(role_key, {"allowed_capabilities": ["*"], "disallowed_actions": []})
+        if allowed_capabilities is not None:
+            current["allowed_capabilities"] = list(allowed_capabilities)
+        if disallowed_actions is not None:
+            current["disallowed_actions"] = list(disallowed_actions)
+
     def request(
         self,
         task_id: str,
@@ -161,7 +260,22 @@ class PermissionManager:
             metadata=req_meta,
         )
 
-        # 1. Pre-declaration Sandboxing manifest check
+        # 1. RBAC User Role authorization check (Interface Auth vs Worker Sandbox integration)
+        user_role = req_meta.get("user_role") or req_meta.get("role") or (req_meta.get("auth_context") or {}).get("role")
+        if user_role:
+            if not self.is_role_allowed(user_role, action, requested_capability):
+                decision = PermissionDecision(
+                    approved=False,
+                    reason=(
+                        f"RBAC violation: user role '{user_role}' is not authorized to execute "
+                        f"action '{action}' under capability '{requested_capability}'."
+                    ),
+                    reviewer="rbac_evaluator",
+                )
+                self._emit_event(PermissionEventType.PERMISSION_DENIED, task_id, decision.to_dict())
+                return decision
+
+        # 2. Pre-declaration Sandboxing manifest check
         # If the worker has a registered manifest, check if action is pre-declared
         manifest = self.registry.get_manifest(worker_id)
         if manifest is not None:

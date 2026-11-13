@@ -32,6 +32,7 @@ class EventPersistence:
         try:
             line = self._serialize_event(event)
             with self._lock:
+                self._ensure_directory()
                 with open(self._filepath, "a", encoding="utf-8") as f:
                     f.write(line + "\n")
         except Exception as e:

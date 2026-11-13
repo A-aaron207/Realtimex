@@ -22,6 +22,9 @@ class ExecutionContext:
     configuration: dict[str, Any] = field(default_factory=dict)
     permissions: dict[str, Any] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
+    user_role: str = "admin"
+    user_id: str = ""
+    auth_context: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize context to dictionary."""
@@ -35,6 +38,9 @@ class ExecutionContext:
             "configuration": self.configuration,
             "permissions": self.permissions,
             "metadata": self.metadata,
+            "user_role": self.user_role,
+            "user_id": self.user_id,
+            "auth_context": self.auth_context,
         }
 
     @classmethod
@@ -50,4 +56,7 @@ class ExecutionContext:
             configuration=data.get("configuration", {}),
             permissions=data.get("permissions", {}),
             metadata=data.get("metadata", {}),
+            user_role=data.get("user_role", "admin"),
+            user_id=data.get("user_id", ""),
+            auth_context=data.get("auth_context", {}),
         )

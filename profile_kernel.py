@@ -518,7 +518,7 @@ class RealtimexProfiler:
                 step_id=step.step_id,
                 workflow_id=wf.workflow_id,
                 capability=step.capability,
-                input_data=step.input_data,
+                input=step.input_data,
             )
 
             # Find a matching worker

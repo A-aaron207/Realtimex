@@ -44,24 +44,51 @@ class Module(ModuleEntryPoint):
         if not prompt:
             return {"status": "FAILED", "error": "No prompt provided for generate_code."}
 
+        ext = os.path.splitext(file_path)[1].lower() if file_path else ""
+        prompt_lower = prompt.lower()
+
+        if ext in (".html", ".htm") or any(w in prompt_lower for w in ("html", "webpage", "web page", "website")):
+            system_prompt = (
+                f"Generate a complete, modern, self-contained HTML document (including <html>, <head>, <style>, <body>) matching this requirement:\n"
+                f"{prompt}\n"
+                f"CRITICAL RULES:\n"
+                f"1. Return ONLY the raw HTML code starting with <!DOCTYPE html> and ending with </html>.\n"
+                f"2. Do NOT write a Python script.\n"
+                f"3. Do NOT use 'import os', 'with open', or any file-saving code.\n"
+                f"4. Do NOT wrap in Python strings or markdown explanation."
+            )
+        elif ext == ".css" or "css" in prompt_lower:
+            system_prompt = f"Generate a complete CSS stylesheet for:\n{prompt}\nOutput ONLY raw CSS code."
+        elif ext in (".js", ".ts") or "javascript" in prompt_lower:
+            system_prompt = f"Generate raw JavaScript code for:\n{prompt}\nOutput ONLY raw code."
+        else:
+            system_prompt = f"Generate programming code matching this requirement:\n{prompt}\nOutput ONLY the raw code."
+
         model_gateway = self._get_model_gateway()
         request = ModelRequest(
             task_id="code_generation",
             request_type="generate",
             capability_required="reasoning",
-            prompt=f"Generate programming code matching this requirement:\n{prompt}\nOutput ONLY the raw code.",
+            prompt=system_prompt,
             preferred_model=preferred_model
         )
         response = asyncio.run(model_gateway.generate(request))
         code = response.output.strip()
 
         # Clean markdown wrappers if present
-        for fence in ["```python", "```javascript", "```html", "```css", "```json", "```"]:
+        for fence in ["```python", "```javascript", "```html", "```css", "```json", "```bash", "```sh", "```"]:
             if code.startswith(fence):
                 code = code[len(fence):]
             if code.endswith("```"):
                 code = code[:-3]
         code = code.strip()
+
+        # If target is HTML or prompt asks for HTML, extract pure HTML if model wrapped it in Python
+        if ext in (".html", ".htm") or any(w in prompt_lower for w in ("html", "webpage", "web page", "website")):
+            import re
+            html_match = re.search(r'(<!DOCTYPE html[\s\S]*?</html>|<html[\s\S]*?</html>)', code, re.IGNORECASE)
+            if html_match:
+                code = html_match.group(1).strip()
 
         if file_path:
             abs_path = os.path.abspath(file_path)

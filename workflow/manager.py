@@ -63,16 +63,18 @@ class WorkflowManager:
     def create_workflow(
         self,
         parent_task_id: str,
-        goal: str,
+        goal: str = "",
         metadata: dict[str, Any] | None = None,
+        step_definitions: list[dict[str, Any]] | None = None,
     ) -> Workflow:
         """
-        Create a new workflow based on user goal, plan steps, and persist it.
+        Create a new workflow based on user goal or custom step definitions, plan steps, and persist it.
 
         Args:
             parent_task_id: UUID of parent task.
             goal: Task goal.
             metadata: Custom metadata dictionary.
+            step_definitions: Optional pre-defined step configurations.
 
         Returns:
             The planned Workflow.
@@ -86,7 +88,23 @@ class WorkflowManager:
             )
 
             # 2. Plan steps
-            planned_steps = self._planner.plan(wf.workflow_id, goal)
+            if step_definitions:
+                planned_steps = []
+                for sd in step_definitions:
+                    planned_steps.append(
+                        WorkflowStep(
+                            step_id=sd["step_id"],
+                            workflow_id=wf.workflow_id,
+                            capability=sd["capability"],
+                            input_data=sd.get("input_data", {}),
+                            output_data=sd.get("output_data", {}),
+                            status=StepState(sd.get("status", StepState.PENDING.value)),
+                            dependencies=frozenset(sd.get("dependencies", [])),
+                            metadata=sd.get("metadata", {}),
+                        )
+                    )
+            else:
+                planned_steps = self._planner.plan(wf.workflow_id, goal)
             steps_dict = {s.step_id: s for s in planned_steps}
 
             # Find root step (first step without dependencies, or planning step)

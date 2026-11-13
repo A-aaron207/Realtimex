@@ -63,20 +63,31 @@ class TaskRecovery:
                 )
                 self._repository.update(updated_task)
 
-                # Emit TaskRecovered event
-                self._event_bus.publish(
-                    Event(
-                        name="TaskRecovered",
-                        source="tasks.recovery",
-                        task_id=task.task_id,
-                        payload={
-                            "task_id": task.task_id,
-                            "goal": task.goal,
-                            "state": task.state.value,
-                            "priority": task.priority.value,
-                        },
+                # Emit TaskRecovered event — only if the bus is still running.
+                # During graceful shutdown or test teardown the bus may have
+                # already been stopped; in that case we skip the notification
+                # rather than raising EventBusShutdownError (the task is still
+                # safely persisted in the repository).
+                if self._event_bus.is_running:
+                    self._event_bus.publish(
+                        Event(
+                            name="TaskRecovered",
+                            source="tasks.recovery",
+                            task_id=task.task_id,
+                            payload={
+                                "task_id": task.task_id,
+                                "goal": task.goal,
+                                "state": task.state.value,
+                                "priority": task.priority.value,
+                            },
+                        )
                     )
-                )
+                else:
+                    self._logger.warning(
+                        "Task %s recovered in repository but TaskRecovered event"
+                        " could not be published — Event Bus is already shut down.",
+                        task.task_id,
+                    )
                 self._logger.info("Successfully recovered task %s (state: %s)", task.task_id, task.state.value)
                 recovered_count += 1
             except Exception as e:

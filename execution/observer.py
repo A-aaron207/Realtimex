@@ -68,18 +68,24 @@ class ExecutionObserver:
             )
 
         status = raw_result.get("status", "SUCCESS")
-        error_msg = raw_result.get("error") or raw_result.get("stderr")
-        if status.upper() in ("FAILED", "ERROR") and not error_msg:
-            error_msg = f"Step failed with status '{status}'."
-
         exit_code = raw_result.get("exit_code")
+
+        # Only treat stderr as an error signal when the command actually failed.
+        # Many successful commands produce harmless stderr (e.g., rm warnings about . and ..).
+        is_failure = status.upper() in ("FAILED", "ERROR") or (exit_code is not None and exit_code != 0)
+        error_msg = raw_result.get("error")
+        if is_failure and not error_msg:
+            # Fall back to stderr for diagnostics when no explicit error message
+            error_msg = raw_result.get("stderr")
+        if is_failure and not error_msg:
+            error_msg = f"Step failed with status '{status}'."
 
         return ExecutionObservation(
             step_id=step_id,
             capability=capability,
             status=status,
             output=raw_result,
-            error=error_msg if (status.upper() in ("FAILED", "ERROR") or exit_code not in (None, 0)) else None,
+            error=error_msg if is_failure else None,
             exit_code=exit_code,
             execution_time_ms=duration_ms,
             metadata=raw_result.get("metadata", {}),

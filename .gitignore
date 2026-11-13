@@ -20,3 +20,5 @@ tmp/
 scratch/
 .gemini/
 .env
+env/
+env_new/

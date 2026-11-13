@@ -72,12 +72,18 @@ class ModelGateway:
         
         # 1. Register Groq
         groq_cfg = gateway_config.get("groq", {})
-        groq = GroqAdapter(api_key=groq_cfg.get("api_key"), base_url=groq_cfg.get("base_url"))
+        groq = GroqAdapter(
+            api_key=groq_cfg.get("api_key"),
+            base_url=groq_cfg.get("base_url"),
+            model_fallback_chain=groq_cfg.get("model_fallback_chain"),
+            temperature=groq_cfg.get("temperature", 0.4),
+        )
         await groq.initialize()
         self.registry.register_provider("groq", groq)
         for m in await groq.list_models():
             self.registry.register_model(ModelMetadata.from_dict(m))
         self._emit_event(ModelGatewayEventType.PROVIDER_REGISTERED, "", {"provider": "groq"})
+
 
         # 2. Register NVIDIA
         nv_cfg = gateway_config.get("nvidia", {})
@@ -197,60 +203,44 @@ class ModelGateway:
                 execute_fn=self.router.route_generate,
             )
         except Exception as e:
-            self.logger.warning("All live provider routes failed. Falling back to simulated response. Error: %s", e)
-            import time
-            start_time = time.time()
-            prompt_words = len(request.prompt.split())
-            completion = (
-                f"Simulated Fallback Response (auto) for prompt: '{request.prompt[:30]}...'. "
-                f"Processed prompt with context."
-            )
-            
-            # Context-specific answers for verification tests
-            prompt_lower = request.prompt.lower()
-            if "france" in prompt_lower:
-                completion = "Paris is the capital of France."
-            elif "fibonacci" in prompt_lower:
-                completion = "def fibonacci(n):\n    if n <= 1: return n\n    return fibonacci(n-1) + fibonacci(n-2)"
-            elif "recursion" in prompt_lower:
-                completion = "Recursion is a programming concept where a function calls itself. Example: factorial."
-            elif "linked list" in prompt_lower:
-                completion = "Here is a Python function to reverse a linked list: def reverse(head): ..."
-            elif "decorators" in prompt_lower:
-                completion = "Decorators in Python are wrappers around functions to modify their behavior."
-            elif "neural networks" in prompt_lower:
-                completion = "Neural networks history spans from Perceptrons to deep learning models."
-            elif "merge search topics" in prompt_lower or "parallel workflow" in prompt_lower:
-                completion = "Merged search topics summary report: [search_a] [search_b] [merge]"
-            elif "sprint 1" in prompt_lower or "summarize" in prompt_lower:
-                completion = "Sprint 1 is complete and verified."
-                
-            token_usage = {
-                "prompt_tokens": int(prompt_words * 1.3),
-                "completion_tokens": int(len(completion.split()) * 1.3),
-                "total_tokens": int(prompt_words * 1.3) + int(len(completion.split()) * 1.3),
-            }
+            error_msg = str(e)
+            # Detect the specific cause so the user gets a useful message
+            if "name resolution" in error_msg or "Errno -3" in error_msg or "Temporary failure" in error_msg:
+                friendly = (
+                    "⚠ No internet connection — cannot reach the AI model (Groq/OpenRouter).\n"
+                    "Please check your network and try again."
+                )
+            elif "exhausted" in error_msg.lower() or "quota" in error_msg.lower() or "rate limit" in error_msg.lower():
+                friendly = (
+                    "⚠ All AI model providers are rate-limited or quota-exhausted.\n"
+                    "Please wait a few minutes and try again."
+                )
+            elif "Credentials not configured" in error_msg or "mock values" in error_msg:
+                friendly = (
+                    "⚠ AI model credentials are not configured.\n"
+                    "Please add your API key to config/config.json or .env."
+                )
+            else:
+                friendly = f"⚠ AI model unavailable: {error_msg}"
+
+            self.logger.error("All provider routes failed — returning error to user. Error: %s", e)
+            import time as _time
             response = ModelResponse(
-                output=completion,
-                provider_used="mock",
-                model_used="mock-model",
-                token_usage=token_usage,
-                latency=time.time() - start_time,
-                finish_reason="stop",
-                metadata={"simulated": True, "fallback": True}
+                output=friendly,
+                provider_used="error",
+                model_used="none",
+                token_usage={"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+                latency=0.0,
+                finish_reason="error",
+                metadata={"error": True, "error_message": error_msg},
             )
             self._emit_event(
                 ModelGatewayEventType.REQUEST_COMPLETED,
                 request.task_id,
-                {
-                    "provider": "mock",
-                    "model": "mock-model",
-                    "latency": response.latency,
-                    "tokens": token_usage["total_tokens"],
-                },
+                {"provider": "error", "model": "none", "latency": 0.0, "tokens": 0},
             )
             if hasattr(self, "metrics") and self.metrics:
-                self.metrics.record_model_usage("mock", "mock-model", True, response.latency, token_usage["total_tokens"])
+                self.metrics.record_model_usage("error", "none", False, 0.0, 0)
 
         # Cache response
         self.cache.set(

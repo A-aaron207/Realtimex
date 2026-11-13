@@ -48,6 +48,9 @@ class WorkerRuntime(BaseWorker):
         super().__init__(worker_id, worker_type, supported_capability, metadata)
         self._event_bus = event_bus
         self._module_resolver = module_resolver
+        from execution.engine import AgentExecutionEngine
+        self._execution_engine = AgentExecutionEngine(logger=self._logger)
+
 
     def execute(self, context: ExecutionContext) -> WorkerReport:
         """
@@ -178,6 +181,9 @@ class WorkerRuntime(BaseWorker):
             configuration=context.configuration,
             permissions=context.permissions,
             metadata=context.metadata,
+            user_role=getattr(context, "user_role", "admin"),
+            user_id=getattr(context, "user_id", ""),
+            auth_context=getattr(context, "auth_context", {}),
         )
 
         try:
@@ -225,20 +231,58 @@ class WorkerRuntime(BaseWorker):
             elif context.capability == "write_file":
                 # Check if file exists -> representing an overwrite
                 file_path = resolved_input.get("path") or resolved_input.get("file_path")
-                if file_path and os.path.exists(os.path.abspath(os.path.expanduser(file_path))):
+                raw_content = str(context.input.get("content", ""))
+                is_pipeline_save = "Process " in raw_content and " output" in raw_content
+                if file_path and os.path.exists(os.path.abspath(os.path.expanduser(file_path))) and not is_pipeline_save:
                     is_destructive = True
                     action = "overwrite"
             elif context.capability == "run_command":
                 cmd = resolved_input.get("command", "").lower()
+                # Security: Block catastrophic move/delete of workspace root
+                import re
+                dangerous_workspace_patterns = [
+                    r"\bmv\s+(?:-[a-zA-Z]+\s+)*\*\s+",
+                    r"\bmv\s+(?:-[a-zA-Z]+\s+)*\.\/\*\s+",
+                    r"\bcp\s+(?:-[a-zA-Z]+\s+)*\*\s+",
+                    r"\bcp\s+(?:-[a-zA-Z]+\s+)*\.\/\*\s+",
+                ]
+                for pat in dangerous_workspace_patterns:
+                    if re.search(pat, cmd):
+                        raise WorkerExecutionError(f"Security violation: wildcard operation '{cmd}' moving entire workspace is prohibited.")
+
                 if any(term in cmd for term in ("rm ", "rmdir ", "remove ", "delete ", "move to trash", "recursive delete")):
                     is_destructive = True
                     action = "destructive_command"
 
-            if is_destructive:
-                from services.registry import ServiceRegistry
-                reg = ServiceRegistry.get_instance()
-                if reg.exists("permission_manager"):
-                    perm_mgr = reg.get("permission_manager").metadata["manager"]
+            # Evaluate RBAC security limits and destructive action checks
+            from services.registry import ServiceRegistry
+            reg = ServiceRegistry.get_instance()
+            if reg.exists("permission_manager"):
+                perm_mgr = reg.get("permission_manager").metadata["manager"]
+                user_role = getattr(context, "user_role", "admin") or "admin"
+                auth_meta = {
+                    "user_role": user_role,
+                    "user_id": getattr(context, "user_id", ""),
+                    "auth_context": getattr(context, "auth_context", {}),
+                }
+
+                # Check role-capability authorization if role is restricted (non-admin)
+                if user_role.lower() != "admin" and hasattr(perm_mgr, "is_role_allowed"):
+                    if not perm_mgr.is_role_allowed(user_role, action, context.capability):
+                        decision = perm_mgr.request(
+                            task_id=context.task_id,
+                            worker_id=self.worker_id,
+                            action=action,
+                            target=str(target),
+                            requested_capability=context.capability,
+                            risk_level="high",
+                            workflow_id=context.workflow_id,
+                            metadata=auth_meta,
+                        )
+                        if not decision.approved:
+                            raise WorkerExecutionError(f"Action denied: {decision.reason}")
+
+                if is_destructive:
                     decision = perm_mgr.request(
                         task_id=context.task_id,
                         worker_id=self.worker_id,
@@ -246,7 +290,8 @@ class WorkerRuntime(BaseWorker):
                         target=str(target),
                         requested_capability=context.capability,
                         risk_level="critical",
-                        workflow_id=context.workflow_id
+                        workflow_id=context.workflow_id,
+                        metadata=auth_meta,
                     )
                     if not decision.approved:
                         raise WorkerExecutionError(f"Action denied: {decision.reason}")
@@ -263,51 +308,74 @@ class WorkerRuntime(BaseWorker):
             if not loaded_module:
                 raise WorkerExecutionError(f"Module '{module_id}' is not loaded in Kernel.")
 
-            # 3. Invoke capability method dynamically
+            # 3. Invoke capability method dynamically through Executor 2.0 Reliability Loop
             module_instance = loaded_module.instance
             capability_name = context.capability
 
-            # Prioritize standardized execution contract
-            if hasattr(module_instance, "execute") and callable(getattr(module_instance, "execute")):
-                self._logger.debug("Executing capability via standardized contract: %s.execute(%r)", module_id, capability_name)
-                try:
-                    try:
-                        output_data = module_instance.execute(capability_name, context)
-                    except TypeError:
-                        try:
-                            output_data = module_instance.execute(context)
-                        except TypeError:
-                            output_data = module_instance.execute(capability_name, context.input)
-                except NotImplementedError:
-                    self._logger.warning(
-                        "Module '%s' raised NotImplementedError for capability '%s'. Simulating execution...",
-                        module_id,
-                        capability_name,
-                    )
-                    output_data = self._simulate_fallback(capability_name, context.input)
-                    warnings.append(f"Simulated execution. Method '{capability_name}' not implemented in module.")
-            elif hasattr(module_instance, capability_name):
-                method = getattr(module_instance, capability_name)
-                if callable(method):
-                    self._logger.debug("Executing capability method: %s.%s()", module_id, capability_name)
-                    try:
-                        output_data = method(context.input)
-                    except TypeError:
-                        output_data = method(context)
-                else:
-                    raise WorkerExecutionError(
-                        f"Module attribute '{capability_name}' is not callable."
-                    )
-            else:
-                # 4. Fallback execution simulation
-                # Enables Milestone 6 to demonstrate modules that do not implement execution code yet.
-                self._logger.warning(
-                    "Module '%s' does not implement method for capability '%s'. Simulating execution...",
-                    module_id,
-                    capability_name,
+            def _raw_execute(step_input: dict[str, Any]) -> dict[str, Any]:
+                exec_ctx = ExecutionContext(
+                    task_id=context.task_id,
+                    workflow_id=context.workflow_id,
+                    step_id=context.step_id,
+                    capability=context.capability,
+                    input=step_input,
+                    memory_reference=context.memory_reference,
+                    configuration=context.configuration,
+                    permissions=context.permissions,
+                    metadata=context.metadata,
+                    user_role=getattr(context, "user_role", "admin"),
+                    user_id=getattr(context, "user_id", ""),
+                    auth_context=getattr(context, "auth_context", {}),
                 )
-                output_data = self._simulate_fallback(capability_name, context.input)
-                warnings.append(f"Simulated execution. Method '{capability_name}' not implemented in module.")
+                res: Any = None
+                if hasattr(module_instance, "execute") and callable(getattr(module_instance, "execute")):
+                    try:
+                        try:
+                            res = module_instance.execute(capability_name, exec_ctx)
+                        except TypeError:
+                            try:
+                                res = module_instance.execute(exec_ctx)
+                            except TypeError:
+                                res = module_instance.execute(capability_name, step_input)
+                    except NotImplementedError:
+                        res = self._simulate_fallback(capability_name, step_input)
+                elif hasattr(module_instance, capability_name):
+                    method = getattr(module_instance, capability_name)
+                    if callable(method):
+                        try:
+                            res = method(step_input)
+                        except TypeError:
+                            res = method(exec_ctx)
+                    else:
+                        raise WorkerExecutionError(f"Module attribute '{capability_name}' is not callable.")
+                else:
+                    res = self._simulate_fallback(capability_name, step_input)
+
+                if isinstance(res, dict):
+                    return res
+                return {"output": res, "status": "SUCCESS"}
+
+            # Reliability loop via AgentExecutionEngine (Executor 2.0)
+            step_spec = {
+                "step_id": context.step_id,
+                "capability": context.capability,
+                "input_data": resolved_input,
+            }
+            engine_report = self._execution_engine.execute_step(
+                step=step_spec,
+                worker_executor=_raw_execute,
+                context={"task_id": context.task_id, "workflow_id": context.workflow_id},
+            )
+
+            if engine_report.repaired:
+                self._logger.info("Step '%s' self-healed: %s", context.step_id, engine_report.repair_summary)
+                warnings.append(f"Auto-repaired: {engine_report.repair_summary}")
+
+            if engine_report.status != "SUCCESS":
+                raise WorkerExecutionError(engine_report.error or f"Step '{context.step_id}' failed execution.")
+
+            output_data = engine_report.output
+
 
             # Capture mock artifacts for realistic outputs in demo
             if "artifacts" in output_data and isinstance(output_data["artifacts"], list):

@@ -30,9 +30,9 @@ VALID_STEP_TRANSITIONS: dict[StepState, set[StepState]] = {
     StepState.PENDING: {StepState.READY, StepState.WAITING, StepState.SKIPPED, StepState.CANCELLED, StepState.RUNNING},
     StepState.WAITING: {StepState.READY, StepState.SKIPPED, StepState.CANCELLED, StepState.RUNNING},
     StepState.READY: {StepState.RUNNING, StepState.SKIPPED, StepState.CANCELLED, StepState.COMPLETED},
-    StepState.RUNNING: {StepState.COMPLETED, StepState.FAILED, StepState.CANCELLED, StepState.SKIPPED},
+    StepState.RUNNING: {StepState.COMPLETED, StepState.FAILED, StepState.CANCELLED, StepState.SKIPPED, StepState.WAITING, StepState.PENDING},
     StepState.COMPLETED: set(),
-    StepState.FAILED: set(),
+    StepState.FAILED: {StepState.PENDING, StepState.WAITING},
     StepState.SKIPPED: set(),
     StepState.CANCELLED: set(),
 }

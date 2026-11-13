@@ -33,6 +33,14 @@
   },
   "model_gateway": {
     "default_provider": "openrouter",
+    "groq": {
+      "model_fallback_chain": [
+        "openai/gpt-oss-120b",
+        "qwen/qwen3.6-27b",
+        "openai/gpt-oss-20b"
+      ],
+      "temperature": 0.4
+    },
     "providers": {
       "anthropic": {
         "model": "claude-3-5-sonnet"
@@ -58,13 +66,13 @@
         },
         "fallback": {
           "provider": "groq",
-          "model": "llama-3.3-70b"
+          "model": "openai/gpt-oss-120b"
         }
       },
       "coding": {
         "primary": {
           "provider": "groq",
-          "model": "qwen-coder"
+          "model": "openai/gpt-oss-120b"
         },
         "fallback": {
           "provider": "openrouter",
@@ -74,7 +82,7 @@
       "chat": {
         "primary": {
           "provider": "groq",
-          "model": "gemma"
+          "model": "openai/gpt-oss-120b"
         },
         "fallback": {
           "provider": "openrouter",
@@ -94,7 +102,7 @@
       "summarization": {
         "primary": {
           "provider": "groq",
-          "model": "llama-3.3-70b"
+          "model": "openai/gpt-oss-120b"
         },
         "fallback": {
           "provider": "openrouter",
@@ -104,7 +112,7 @@
       "classification": {
         "primary": {
           "provider": "groq",
-          "model": "llama-3.3-70b"
+          "model": "openai/gpt-oss-120b"
         },
         "fallback": {
           "provider": "openrouter",
@@ -118,7 +126,7 @@
         },
         "fallback": {
           "provider": "groq",
-          "model": "llama-3.3-70b"
+          "model": "openai/gpt-oss-120b"
         }
       },
       "repair": {
@@ -128,13 +136,13 @@
         },
         "fallback": {
           "provider": "groq",
-          "model": "llama-3.3-70b"
+          "model": "openai/gpt-oss-120b"
         }
       },
       "translation": {
         "primary": {
           "provider": "groq",
-          "model": "gemma"
+          "model": "openai/gpt-oss-120b"
         },
         "fallback": {
           "provider": "openrouter",
@@ -144,7 +152,7 @@
       "tool_selection": {
         "primary": {
           "provider": "groq",
-          "model": "gemma"
+          "model": "openai/gpt-oss-120b"
         },
         "fallback": {
           "provider": "openrouter",
@@ -154,7 +162,7 @@
       "intent_detection": {
         "primary": {
           "provider": "groq",
-          "model": "gemma"
+          "model": "openai/gpt-oss-120b"
         },
         "fallback": {
           "provider": "openrouter",

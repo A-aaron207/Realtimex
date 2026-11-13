@@ -51,6 +51,7 @@ class WorkflowPersistence:
         filepath = self._filepath(workflow.workflow_id)
         with self._lock:
             try:
+                self._ensure_directory()
                 temp_filepath = filepath.with_suffix(".tmp")
                 with open(temp_filepath, "w", encoding="utf-8") as f:
                     json.dump(workflow.to_dict(), f, indent=2, ensure_ascii=False)

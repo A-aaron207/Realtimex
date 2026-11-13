@@ -62,3 +62,22 @@ class WorkerAPI:
         Retrieve state and configuration status details of a specific worker.
         """
         return self._manager.status(worker_id)
+
+    def register_capability(self, capability: str, initial_workers: int = 1) -> Any:
+        """
+        Register a new worker pool for a capability.
+        """
+        return self._manager.register_capability(capability, initial_workers)
+
+    def has_idle_worker(self, capability: str) -> bool:
+        """
+        Check whether an idle worker is available for a capability.
+        """
+        return self._manager.has_idle_worker(capability)
+
+    def list_workers(self) -> list[Any]:
+        """
+        Return a list of all workers across all pools.
+        """
+        return self._manager.list_workers()
+

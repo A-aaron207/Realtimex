@@ -70,6 +70,7 @@ class EventLogger:
     
     def _write_line(self, data: dict[str, Any]) -> None:
         with self._lock:
+            self._ensure_directory()
             with open(self._filepath, "a", encoding="utf-8") as f:
                 f.write(json.dumps(data) + "\n")
     

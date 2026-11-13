@@ -80,6 +80,14 @@ def main() -> None:
         print("Please provide this file when reporting issues.")
         sys.exit(1)
 
+    # Mute verbose internal event logs on stdout unless --debug is requested
+    if not has_debug:
+        root_logger = logging.getLogger("realtimex")
+        for h in root_logger.handlers:
+            if isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler):
+                h.setLevel(logging.WARNING)
+
+
     # Check if developer mode is requested
     if len(args_to_check) > 1 and args_to_check[1] == "dev":
         from kernel.dev_mode import run_developer_mode
@@ -176,10 +184,18 @@ def main() -> None:
                         clean_result = raw_result
                         if clean_result.startswith("Workflow result:"):
                             clean_result = clean_result[len("Workflow result:"):].strip()
-                        if clean_result.startswith("[") and "]" in clean_result:
-                            clean_result = clean_result.split("]", 1)[1].strip()
+                        
+                        # For multi-step workflows, prioritize the final synthesis/answer deliverable
+                        for final_marker in ["[synthesize]", "[answer]", "[summary]", "[merge]"]:
+                            if final_marker in clean_result:
+                                clean_result = clean_result.split(final_marker, 1)[1].strip()
+                                break
+                        else:
+                            if clean_result.startswith("[") and "]" in clean_result:
+                                clean_result = clean_result.split("]", 1)[1].strip()
                         
                         print(f"\n{clean_result}\n")
+
                     else:
                         print("\n[No response content generated]\n")
                 else:
